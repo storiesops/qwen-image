@@ -214,25 +214,25 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"❌ Failed to load Qwen-Image model: {e}")
         logger.info("🔧 Trying alternative loading method...")
-            try:
-                # Fallback: Original model in FP16 (if BF16 fails)
-                pipeline = DiffusionPipeline.from_pretrained(
-                    "Qwen/Qwen-Image",  # Same official model, different precision
-                    torch_dtype=torch.float16,  # FP16 fallback
-                    low_cpu_mem_usage=True,
-                    device_map="auto",  # Auto device management
-                    use_safetensors=True
-                )
-                
-                # CRITICAL: Ensure ALL components are on GPU for fallback too
-                pipeline = pipeline.to("cuda")
-                logger.info("✅ Fallback pipeline components moved to GPU")
-                
-                # Force CPU offloading immediately for fallback (if needed)
-                if hasattr(pipeline, 'enable_model_cpu_offload'):
-                    pipeline.enable_model_cpu_offload()
-                    logger.info("🔄 Enabled CPU offloading for fallback method")
-                logger.info("✅ Original Qwen-Image loaded with FP16 fallback")
+        try:
+            # Fallback: Original model in FP16 (if BF16 fails)
+            pipeline = DiffusionPipeline.from_pretrained(
+                "Qwen/Qwen-Image",  # Same official model, different precision
+                torch_dtype=torch.float16,  # FP16 fallback
+                low_cpu_mem_usage=True,
+                device_map="auto",  # Auto device management
+                use_safetensors=True
+            )
+            
+            # CRITICAL: Ensure ALL components are on GPU for fallback too
+            pipeline = pipeline.to("cuda")
+            logger.info("✅ Fallback pipeline components moved to GPU")
+            
+            # Force CPU offloading immediately for fallback (if needed)
+            if hasattr(pipeline, 'enable_model_cpu_offload'):
+                pipeline.enable_model_cpu_offload()
+                logger.info("🔄 Enabled CPU offloading for fallback method")
+            logger.info("✅ Original Qwen-Image loaded with FP16 fallback")
         except Exception as e2:
             logger.error(f"❌ Complete model loading failure: {e2}")
             raise e2
