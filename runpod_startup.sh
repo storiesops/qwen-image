@@ -223,11 +223,11 @@ async def lifespan(app: FastAPI):
             torch_dtype=torch.bfloat16,
         )
         
-        # Step 4: FIX for black images - use direct GPU placement instead of CPU offload
-        # Black images are caused by attention mechanism issues with cpu_offload
-        pipeline = pipeline.to("cuda")  # Direct GPU placement
-        logger.info("✅ DFloat11 loaded using official 32GB+ pattern") 
-        logger.info("✅ Direct GPU placement (no CPU offload to fix black images)")
+        # Step 4: EXACT official pattern - ALWAYS use enable_model_cpu_offload()
+        # This is required for DFloat11 to work properly (even for 48GB VRAM)
+        pipeline.enable_model_cpu_offload()
+        logger.info("✅ DFloat11 loaded using EXACT official pattern")
+        logger.info("✅ Model size should be 28.42GB (not 40GB)")
         
         # VERIFY: Check all components are on CUDA
         if hasattr(pipeline, 'transformer') and pipeline.transformer is not None:
@@ -277,8 +277,8 @@ async def lifespan(app: FastAPI):
                 torch_dtype=torch.bfloat16,
             )
             
-            # FIX: Direct GPU placement instead of CPU offload (prevents black images)
-            pipeline = pipeline.to("cuda")
+            # EXACT official pattern - use enable_model_cpu_offload()
+            pipeline.enable_model_cpu_offload()
             
             # VERIFY: Check device placement
             if hasattr(pipeline, 'transformer') and pipeline.transformer is not None:
@@ -304,8 +304,8 @@ async def lifespan(app: FastAPI):
                     use_safetensors=True
                 )
                 
-                # FIX: Direct GPU placement (prevents black images)  
-                pipeline = pipeline.to("cuda")
+                # Standard enable_model_cpu_offload  
+                pipeline.enable_model_cpu_offload()
                 
                 # VERIFY: Check device placement
                 if hasattr(pipeline, 'transformer') and pipeline.transformer is not None:
