@@ -30,7 +30,8 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 # Clean up immediately after install to save space
 pip cache purge
 echo "📊 Disk usage after PyTorch install:"
-df -h /
+echo "Container:" && df -h / || true
+echo "Volume:" && df -h /workspace || true
 
 echo "🤗 Installing Hugging Face libraries with correct versions..."
 # Qwen-Image specifically requires transformers>=4.51.3 for Qwen2.5-VL support  
@@ -59,7 +60,8 @@ pip install "pillow>=10.0.0" requests --no-cache-dir
 # Final cache cleanup
 pip cache purge
 echo "📊 Final disk usage after installs:"
-df -h /
+echo "Container:" && df -h / || true
+echo "Volume (critical):" && df -h /workspace || true
 
 echo "🌍 Setting up environment variables..."
 export HF_HOME=/workspace/.cache/huggingface  # Replace deprecated TRANSFORMERS_CACHE
@@ -71,18 +73,26 @@ echo "🧹 EMERGENCY: Cleaning disk space and GPU processes..."
 pkill -f "python.*qwen" || true
 pkill -f "uvicorn.*qwen" || true
 
-# AGGRESSIVE DISK CLEANUP for RunPod
-echo "💾 Freeing up disk space..."
-apt-get clean
-apt-get autoremove -y
-rm -rf /var/lib/apt/lists/*
-rm -rf /tmp/*
-rm -rf /var/tmp/*
-rm -rf /root/.cache/*
+# AGGRESSIVE DISK CLEANUP for RunPod VOLUME (not container!)
+echo "💾 Freeing up VOLUME disk space at /workspace..."
 
-# Clean Python cache
+# Clean the VOLUME disk where work actually happens
+rm -rf /workspace/.cache/* || true
+rm -rf /workspace/Qwen-Image/.git || true  # Remove git history (saves ~100MB)
+rm -rf /workspace/*.log || true
+rm -rf /workspace/temp* || true
+rm -rf /workspace/tmp* || true
+
+# Clean container disk too (but this isn't the main issue)
+apt-get clean || true
+rm -rf /var/lib/apt/lists/* || true
+rm -rf /tmp/* || true
+rm -rf /var/tmp/* || true
+
+# Clean Python cache (both locations)
 pip cache purge || true
 python -m pip cache purge || true
+rm -rf ~/.cache/pip || true
 
 # Clean conda if exists
 conda clean -all -y || true
@@ -91,7 +101,10 @@ conda clean -all -y || true
 nvidia-smi --gpu-reset-gpus=$(nvidia-smi --query-gpu=index --format=csv,noheader,nounits) || true
 
 echo "📊 Disk usage after cleanup:"
+echo "Container disk:"
 df -h /
+echo "Volume disk (where work happens):"
+df -h /workspace || echo "Volume not mounted yet"
 sleep 2
 
 echo "🚫 SKIPPING FlashAttention-2 - causes crashes with PyTorch 2.8 dev even when gracefully handled"
@@ -99,6 +112,10 @@ echo "⚡ Using native PyTorch attention (100% reliable, still fast!)"
 
 # Create our simple API wrapper
 echo "🔧 Creating FastAPI wrapper..."
+echo "🧹 FINAL cleanup before writing API file..."
+# Emergency volume cleanup right before file creation
+rm -rf /workspace/.cache/huggingface/hub/models--* || true
+df -h /workspace || true
 cat > /workspace/qwen_api.py << 'EOF'
 #!/usr/bin/env python3
 """
