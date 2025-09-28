@@ -222,7 +222,11 @@ async def lifespan(app: FastAPI):
             torch_dtype=torch.bfloat16,
         )
         
+        # Step 4: ALWAYS use enable_model_cpu_offload() as per official docs
+        # This handles device management properly, even for 32GB+ case
+        pipeline.enable_model_cpu_offload()
         logger.info("✅ DFloat11 loaded using official 32GB+ pattern")
+        logger.info("✅ Official device management enabled")
         
         # VERIFY: Check all components are on CUDA
         if hasattr(pipeline, 'transformer') and pipeline.transformer is not None:
@@ -272,6 +276,9 @@ async def lifespan(app: FastAPI):
                 torch_dtype=torch.bfloat16,
             )
             
+            # Official device management (required for DFloat11)
+            pipeline.enable_model_cpu_offload()
+            
             # VERIFY: Check device placement
             if hasattr(pipeline, 'transformer') and pipeline.transformer is not None:
                 transformer_device = next(pipeline.transformer.parameters()).device
@@ -291,12 +298,13 @@ async def lifespan(app: FastAPI):
                 pipeline = DiffusionPipeline.from_pretrained(
                     "Qwen/Qwen-Image",  # Original model without compression
                     torch_dtype=torch.bfloat16,
-                    low_cpu_mem_usage=True,  # Fix the error
-                    device_map="auto",  # Auto device management
+                    low_cpu_mem_usage=True,
+                    device_map="auto",
                     use_safetensors=True
                 )
                 
-                # L40S 48GB: NO CPU offload - pure GPU operation
+                # Standard device management
+                pipeline.enable_model_cpu_offload()
                 
                 # VERIFY: Check device placement
                 if hasattr(pipeline, 'transformer') and pipeline.transformer is not None:
@@ -370,7 +378,7 @@ class GenerateRequest(BaseModel):
     width: int = 1024
     height: int = 1024
     num_inference_steps: int = 50
-    guidance_scale: float = 7.0
+    true_cfg_scale: float = 4.0  # Official DFloat11 default
     seed: Optional[int] = None
 
 class GenerateResponse(BaseModel):
@@ -425,11 +433,20 @@ async def generate_image(request: GenerateRequest):
     logger.info(f"🎨 Generating: {request.prompt[:100]}...")
     
     try:
-        # Set up generator for reproducible results - ALWAYS use CUDA
+        # Set up generator for reproducible results 
+        # Match device to pipeline's device (auto-detect)
         generator = None
         if request.seed is not None:
-            generator = torch.Generator(device="cuda")  # Force CUDA always
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            # Try to match pipeline's device if possible
+            if hasattr(pipeline, 'device'):
+                device = str(pipeline.device)
+            elif hasattr(pipeline, '_device'):
+                device = str(pipeline._device)
+                
+            generator = torch.Generator(device=device)
             generator.manual_seed(request.seed)
+            logger.info(f"🎲 Generator device: {device}")
         
         # Generate image
         with torch.inference_mode():
@@ -439,7 +456,7 @@ async def generate_image(request: GenerateRequest):
                 width=request.width,
                 height=request.height,
                 num_inference_steps=request.num_inference_steps,
-                guidance_scale=request.guidance_scale,
+                true_cfg_scale=request.true_cfg_scale,  # Correct parameter for Qwen-Image
                 generator=generator
             )
         
