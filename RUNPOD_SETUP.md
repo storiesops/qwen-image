@@ -12,8 +12,8 @@ This guide shows you how to deploy Qwen-Image using a **RunPod template** with *
    Container Image: runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04
    Container Registry Credentials: (leave empty - public image)
    
-   Container Disk: 35 GB (for DFloat11 compressed Qwen-Image)
-   Volume Disk: 60 GB (for DFloat11 compressed model storage)  
+   Container Disk: 50 GB (increased due to build dependencies + DFloat11 model)
+   Volume Disk: 80 GB (includes model cache + build artifacts)  
    Volume Mount Path: /workspace
    
    Expose HTTP Ports:

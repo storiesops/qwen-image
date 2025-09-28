@@ -25,38 +25,73 @@ pip install --upgrade pip
 
 echo "🔥 Installing PyTorch with CUDA 12.8 support..."
 # Use the exact PyTorch version that works with RunPod's CUDA 12.8
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 --no-cache-dir
+
+# Clean up immediately after install to save space
+pip cache purge
+echo "📊 Disk usage after PyTorch install:"
+df -h /
 
 echo "🤗 Installing Hugging Face libraries with correct versions..."
 # Qwen-Image specifically requires transformers>=4.51.3 for Qwen2.5-VL support  
-pip install "transformers>=4.51.3"
-pip install "accelerate>=0.26.1"
-pip install "safetensors>=0.3.1"
+pip install "transformers>=4.51.3" --no-cache-dir
+pip install "accelerate>=0.26.1" --no-cache-dir
+pip install "safetensors>=0.3.1" --no-cache-dir
+
+# Clean cache after each install
+pip cache purge
 
 echo "🔥 Installing DFloat11 for lossless compression (32% smaller, 100% quality)..."
-pip install -U "dfloat11[cuda12]"
+pip install -U "dfloat11[cuda12]" --no-cache-dir
+pip cache purge
 
 echo "🎨 Installing latest Diffusers from source..."
 # Always use latest diffusers for best Qwen-Image support
-pip install git+https://github.com/huggingface/diffusers
+pip install git+https://github.com/huggingface/diffusers --no-cache-dir
+pip cache purge
 
 echo "🚀 Installing FastAPI stack..."
-pip install "fastapi>=0.100.0" "uvicorn[standard]>=0.23.0" "pydantic>=2.0.0"
+pip install "fastapi>=0.100.0" "uvicorn[standard]>=0.23.0" "pydantic>=2.0.0" --no-cache-dir
 
 echo "🖼️ Installing image processing libraries..."
-pip install "pillow>=10.0.0" requests
+pip install "pillow>=10.0.0" requests --no-cache-dir
+
+# Final cache cleanup
+pip cache purge
+echo "📊 Final disk usage after installs:"
+df -h /
 
 echo "🌍 Setting up environment variables..."
 export HF_HOME=/workspace/.cache/huggingface  # Replace deprecated TRANSFORMERS_CACHE
 export TRANSFORMERS_CACHE=/workspace/.cache/huggingface  # Fallback for compatibility
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True  # Fix memory fragmentation
 
-echo "🧹 Cleaning up any existing GPU processes..."
-# Kill any existing Python processes that might be using GPU memory
+echo "🧹 EMERGENCY: Cleaning disk space and GPU processes..."
+# Kill any existing Python processes
 pkill -f "python.*qwen" || true
 pkill -f "uvicorn.*qwen" || true
+
+# AGGRESSIVE DISK CLEANUP for RunPod
+echo "💾 Freeing up disk space..."
+apt-get clean
+apt-get autoremove -y
+rm -rf /var/lib/apt/lists/*
+rm -rf /tmp/*
+rm -rf /var/tmp/*
+rm -rf /root/.cache/*
+
+# Clean Python cache
+pip cache purge || true
+python -m pip cache purge || true
+
+# Clean conda if exists
+conda clean -all -y || true
+
 # Clear GPU memory
 nvidia-smi --gpu-reset-gpus=$(nvidia-smi --query-gpu=index --format=csv,noheader,nounits) || true
+
+echo "📊 Disk usage after cleanup:"
+df -h /
 sleep 2
 
 echo "🚫 SKIPPING FlashAttention-2 - causes crashes with PyTorch 2.8 dev even when gracefully handled"
