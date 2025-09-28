@@ -143,56 +143,55 @@ async def load_model():
     
     logger.info("🚀 Loading Qwen-Image model...")
     
+    # Load the pipeline with optimal settings for Qwen-Image
     try:
-        # Load the pipeline with optimal settings for Qwen-Image
+        logger.info("🚀 Loading Qwen-Image model with BF16 precision...")
+        
+        # Load with the most reliable settings for Qwen-Image
+        pipeline = DiffusionPipeline.from_pretrained(
+            "Qwen/Qwen-Image",
+            torch_dtype=torch.bfloat16,  # BF16 is most stable for Qwen-Image
+            use_safetensors=True,
+            trust_remote_code=True,  # Required for Qwen models
+            device_map="auto"  # Automatic device mapping
+        )
+        logger.info("✅ Qwen-Image model loaded successfully!")
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to load Qwen-Image model: {e}")
+        logger.info("🔧 Trying alternative loading method...")
         try:
-            logger.info("🚀 Loading Qwen-Image model with BF16 precision...")
-            
-            # Load with the most reliable settings for Qwen-Image
+            # Fallback loading method
             pipeline = DiffusionPipeline.from_pretrained(
                 "Qwen/Qwen-Image",
-                torch_dtype=torch.bfloat16,  # BF16 is most stable for Qwen-Image
+                torch_dtype=torch.float16,  # Try FP16 as fallback
                 use_safetensors=True,
-                trust_remote_code=True,  # Required for Qwen models
-                device_map="auto"  # Automatic device mapping
+                trust_remote_code=True
             )
-            logger.info("✅ Qwen-Image model loaded successfully!")
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to load Qwen-Image model: {e}")
-            logger.info("🔧 Trying alternative loading method...")
-            try:
-                # Fallback loading method
-                pipeline = DiffusionPipeline.from_pretrained(
-                    "Qwen/Qwen-Image",
-                    torch_dtype=torch.float16,  # Try FP16 as fallback
-                    use_safetensors=True,
-                    trust_remote_code=True
-                )
-                logger.info("✅ Model loaded with FP16 fallback")
-            except Exception as e2:
-                logger.error(f"❌ Complete model loading failure: {e2}")
-                raise e2
+            logger.info("✅ Model loaded with FP16 fallback")
+        except Exception as e2:
+            logger.error(f"❌ Complete model loading failure: {e2}")
+            raise e2
+    
+    if torch.cuda.is_available():
+        pipeline = pipeline.to("cuda")
+        logger.info(f"✅ Model loaded on GPU: {torch.cuda.get_device_name()}")
+        logger.info(f"🔥 GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f}GB")
+    else:
+        logger.info("⚠️ Running on CPU (will be slow)")
         
-        if torch.cuda.is_available():
-            pipeline = pipeline.to("cuda")
-            logger.info(f"✅ Model loaded on GPU: {torch.cuda.get_device_name()}")
-            logger.info(f"🔥 GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f}GB")
-        else:
-            logger.info("⚠️ Running on CPU (will be slow)")
-            
-        # Enable ALL memory optimizations for better VRAM usage
-        if hasattr(pipeline, 'enable_attention_slicing'):
-            pipeline.enable_attention_slicing()
-            logger.info("✅ Attention slicing enabled")
-            
-        if hasattr(pipeline, 'enable_vae_slicing'):
-            pipeline.enable_vae_slicing()
-            logger.info("✅ VAE slicing enabled")
-            
-        if hasattr(pipeline, 'enable_vae_tiling'):
-            pipeline.enable_vae_tiling()
-            logger.info("✅ VAE tiling enabled")
+    # Enable ALL memory optimizations for better VRAM usage
+    if hasattr(pipeline, 'enable_attention_slicing'):
+        pipeline.enable_attention_slicing()
+        logger.info("✅ Attention slicing enabled")
+        
+    if hasattr(pipeline, 'enable_vae_slicing'):
+        pipeline.enable_vae_slicing()
+        logger.info("✅ VAE slicing enabled")
+        
+    if hasattr(pipeline, 'enable_vae_tiling'):
+        pipeline.enable_vae_tiling()
+        logger.info("✅ VAE tiling enabled")
             
     if hasattr(pipeline, 'enable_model_cpu_offload'):
         # Only enable CPU offload if we detect limited VRAM
@@ -209,18 +208,14 @@ async def load_model():
     else:
         logger.info("⚡ Native PyTorch attention active - still excellent performance!")
         
-        # Force garbage collection
-        import gc
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            logger.info("✅ GPU memory cache cleared")
-            
-        logger.info("🎉 Qwen-Image model loaded successfully!")
+    # Force garbage collection
+    import gc
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        logger.info("✅ GPU memory cache cleared")
         
-    except Exception as e:
-        logger.error(f"❌ Failed to load model: {e}")
-        pipeline = None
+    logger.info("🎉 Qwen-Image model loaded successfully!")
 
 @app.get("/")
 async def root():
