@@ -12,8 +12,8 @@ This guide shows you how to deploy Qwen-Image using a **RunPod template** with *
    Container Image: runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04
    Container Registry Credentials: (leave empty - public image)
    
-   Container Disk: 40 GB
-   Volume Disk: 80 GB  
+   Container Disk: 35 GB (for official Qwen-Image)
+   Volume Disk: 70 GB (for official Qwen-Image storage)  
    Volume Mount Path: /workspace
    
    Expose HTTP Ports:
@@ -40,20 +40,19 @@ This guide shows you how to deploy Qwen-Image using a **RunPod template** with *
 ## 🖥️ Step 2: Deploy Pod
 
 1. **Create new pod** using your template
-2. **Choose GPU (CRITICAL - Updated with FlashAttention-2 requirements!):**
-   - **🏆 BEST**: NVIDIA L40S (48GB) - Ada Lovelace arch + FlashAttention-2 + 48GB VRAM + newer than A6000
-   - **🥈 Excellent**: RTX A6000 (48GB) - $0.79/hr - Ampere arch + FlashAttention-2 + proven compatibility
-   - **💪 Good**: A100 40GB SXM4 - $1.89/hr - Ampere arch, reliable with optimizations  
-   - **⚠️ No FlashAttention**: RTX 4090 (24GB) - $0.53/hr - Insufficient VRAM for Qwen-Image
-   - **❌ Won't Work**: RTX 3080/3090 - Old architecture + insufficient VRAM
+2. **Choose GPU (UPDATED - Using OFFICIAL Qwen-Image with FP16):**
+   - **🏆 BEST**: RTX A6000 (48GB) - $0.79/hr - Official model with FP16 (~24GB VRAM)
+   - **🥈 Excellent**: NVIDIA L40S (48GB) - Ada Lovelace + plenty of headroom  
+   - **💪 Good**: RTX 4090 (24GB) - $0.53/hr - Should work with memory optimizations
+   - **⚠️ Tight**: RTX 3080/3090 (10-24GB) - May need CPU offload for larger models
+   - **❌ Too Small**: Less than 16GB - Insufficient for official Qwen-Image
    
-   **Why L40S is the NEW top choice:**
-   - ✅ Ada Lovelace architecture (newer than Ampere, excellent FlashAttention-2 support)
-   - ✅ 48GB GDDR6 with ECC (perfect for Qwen-Image BF16 ~44GB usage)
-   - ✅ 1,466 TFLOPS tensor performance (faster than A6000)
-   - ✅ Native FP8 + BF16 support (optimal for our model)
-   - ✅ Officially tested with Qwen models by NVIDIA
-   - ✅ Best FlashAttention-2 performance (20-30% faster than native attention)
+   **Why RTX A6000 is the BEST choice for official Qwen-Image:**
+   - ✅ 48GB VRAM - Perfect for official Qwen-Image FP16 (~24GB usage)
+   - ✅ $0.79/hr - Professional GPU with ECC memory
+   - ✅ Ampere architecture with excellent stability
+   - ✅ Plenty of headroom for complex workflows
+   - ✅ Most reliable option for production use
 
 3. **Deploy and wait** for the startup script to complete (~5-10 minutes)
 

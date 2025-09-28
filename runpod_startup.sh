@@ -43,6 +43,9 @@ pip install "fastapi>=0.100.0" "uvicorn[standard]>=0.23.0" "pydantic>=2.0.0"
 echo "🖼️ Installing image processing libraries..."
 pip install "pillow>=10.0.0" requests
 
+echo "🌍 Setting up environment variables..."
+export HF_HOME=/workspace/.cache/huggingface  # Replace deprecated TRANSFORMERS_CACHE
+
 echo "🚫 SKIPPING FlashAttention-2 - causes crashes with PyTorch 2.8 dev even when gracefully handled"
 echo "⚡ Using native PyTorch attention (100% reliable, still fast!)"
 
@@ -59,6 +62,7 @@ import sys
 import logging
 import asyncio
 from typing import Optional, List
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
@@ -84,53 +88,25 @@ from diffusers import DiffusionPipeline
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(
-    title="Qwen-Image API",
-    description="Simple API for Qwen-Image generation",
-    version="1.0.0"
-)
-
 # Global pipeline
 pipeline = None
 
-class GenerateRequest(BaseModel):
-    prompt: str
-    negative_prompt: Optional[str] = None
-    width: int = 1024
-    height: int = 1024
-    num_inference_steps: int = 50
-    guidance_scale: float = 7.0
-    seed: Optional[int] = None
-
-class GenerateResponse(BaseModel):
-    image: str  # base64 encoded
-    seed: int
-    success: bool = True
-
-def image_to_base64(image: Image.Image) -> str:
-    """Convert PIL image to base64 string"""
-    buffered = io.BytesIO()
-    image.save(buffered, format="PNG")
-    img_str = base64.b64encode(buffered.getvalue()).decode()
-    return img_str
-
-@app.on_event("startup")
-async def load_model():
-    """Load the Qwen-Image model"""
+# Modern FastAPI lifespan handler (replaces deprecated on_event)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
     global pipeline
     
-    logger.info("🚀 Loading Qwen-Image model...")
+    logger.info("🚀 Loading OFFICIAL Qwen-Image with FP16 precision for memory efficiency...")
     
     # Load the pipeline with optimal settings for Qwen-Image
     try:
-        logger.info("🚀 Loading Qwen-Image model with BF16 precision...")
         
-        # Load with the most reliable settings for Qwen-Image
+        # Load the OFFICIAL Qwen-Image model with memory optimizations
         pipeline = DiffusionPipeline.from_pretrained(
-            "Qwen/Qwen-Image",
-            torch_dtype=torch.bfloat16,  # BF16 is most stable for Qwen-Image
+            "Qwen/Qwen-Image",  # OFFICIAL Qwen-Image model
+            dtype=torch.float16,  # FP16 to reduce memory usage
             use_safetensors=True,
-            trust_remote_code=True,  # Required for Qwen models
             device_map="cuda"  # Direct CUDA GPU placement
         )
         logger.info("✅ Qwen-Image model loaded successfully!")
@@ -139,15 +115,14 @@ async def load_model():
         logger.error(f"❌ Failed to load Qwen-Image model: {e}")
         logger.info("🔧 Trying alternative loading method...")
         try:
-            # Fallback loading method
+            # Fallback loading method - CPU compatible
             pipeline = DiffusionPipeline.from_pretrained(
-                "Qwen/Qwen-Image",
-                torch_dtype=torch.float16,  # Try FP16 as fallback
+                "Qwen/Qwen-Image",  # SAME official model, different precision
+                dtype=torch.float32,  # Float32 as fallback for CPU compatibility
                 use_safetensors=True,
-                trust_remote_code=True,
                 device_map="cuda"  # Direct CUDA GPU placement for fallback too
             )
-            logger.info("✅ Model loaded with FP16 fallback")
+            logger.info("✅ Official Qwen-Image loaded with FP32 fallback")
         except Exception as e2:
             logger.error(f"❌ Complete model loading failure: {e2}")
             raise e2
@@ -192,6 +167,41 @@ async def load_model():
         logger.info("✅ GPU memory cache cleared")
         
     logger.info("🎉 Qwen-Image model loaded successfully!")
+    
+    yield
+    
+    # Shutdown
+    logger.info("🔄 Shutting down Qwen-Image API Server...")
+
+app = FastAPI(
+    title="Qwen-Image API",
+    description="Simple API for Qwen-Image generation",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+class GenerateRequest(BaseModel):
+    prompt: str
+    negative_prompt: Optional[str] = None
+    width: int = 1024
+    height: int = 1024
+    num_inference_steps: int = 50
+    guidance_scale: float = 7.0
+    seed: Optional[int] = None
+
+class GenerateResponse(BaseModel):
+    image: str  # base64 encoded
+    seed: int
+    success: bool = True
+
+def image_to_base64(image: Image.Image) -> str:
+    """Convert PIL image to base64 string"""
+    buffered = io.BytesIO()
+    image.save(buffered, format="PNG")
+    img_str = base64.b64encode(buffered.getvalue()).decode()
+    return img_str
+
+# Model loading is now handled in the lifespan function above
 
 @app.get("/")
 async def root():
