@@ -190,25 +190,25 @@ async def lifespan(app: FastAPI):
                 ),
             ).to(torch.bfloat16)
         
-            # Load DFloat11 compressed weights (32% smaller, bit-identical outputs)
-            DFloat11Model.from_pretrained(
-                "DFloat11/Qwen-Image-DF11",
-                device="cuda",  # Full GPU for L40S - maximum performance!
-                cpu_offload=False,  # No CPU offload needed with 48GB VRAM
-                pin_memory=True,  # Optimal for L40S
-                bfloat16_model=transformer,
-            )
-            
-            # Create pipeline with compressed transformer
-            pipeline = DiffusionPipeline.from_pretrained(
-                "Qwen/Qwen-Image",
-                transformer=transformer,
-                torch_dtype=torch.bfloat16,
-            )
-            
-            # CRITICAL: Ensure ALL components are on the same device (GPU)
-            pipeline = pipeline.to("cuda")
-            logger.info("✅ All pipeline components moved to GPU")
+        # Load DFloat11 compressed weights (32% smaller, bit-identical outputs)
+        DFloat11Model.from_pretrained(
+            "DFloat11/Qwen-Image-DF11",
+            device="cuda",  # Full GPU for L40S - maximum performance!
+            cpu_offload=False,  # No CPU offload needed with 48GB VRAM
+            pin_memory=True,  # Optimal for L40S
+            bfloat16_model=transformer,
+        )
+        
+        # Create pipeline with compressed transformer
+        pipeline = DiffusionPipeline.from_pretrained(
+            "Qwen/Qwen-Image",
+            transformer=transformer,
+            torch_dtype=torch.bfloat16,
+        )
+        
+        # ONLY FIX: Ensure ALL components are on the same device (GPU) - this was the ONLY issue!
+        pipeline = pipeline.to("cuda")
+        logger.info("✅ All pipeline components moved to GPU")
         logger.info("✅ Qwen-Image model loaded successfully!")
         
     except Exception as e:
@@ -220,13 +220,10 @@ async def lifespan(app: FastAPI):
                 "Qwen/Qwen-Image",  # Same official model, different precision
                 torch_dtype=torch.float16,  # FP16 fallback
                 low_cpu_mem_usage=True,
-                device_map="auto",  # Auto device management
                 use_safetensors=True
             )
-            
-            # CRITICAL: Ensure ALL components are on GPU for fallback too
+            # Fix device mismatch in fallback too
             pipeline = pipeline.to("cuda")
-            logger.info("✅ Fallback pipeline components moved to GPU")
             
             # Force CPU offloading immediately for fallback (if needed)
             if hasattr(pipeline, 'enable_model_cpu_offload'):
