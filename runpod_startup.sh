@@ -23,9 +23,12 @@ echo "🐍 Installing Python dependencies with verified compatibility..."
 # Upgrade pip first
 pip install --upgrade pip
 
-echo "🔥 Installing PyTorch with CUDA 12.8 support..."
-# Use the exact PyTorch version that works with RunPod's CUDA 12.8
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 --no-cache-dir
+echo "🔥 Installing PyTorch STABLE 2.5.1 (cu124) for DFloat11..."
+# Force replace nightly/dev builds that break DFloat11 kernels
+pip uninstall -y torch torchvision torchaudio || true
+pip install --index-url https://download.pytorch.org/whl/cu124 \
+  --no-cache-dir --force-reinstall --upgrade \
+  torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1
 
 # Clean up immediately after install to save space
 pip cache purge
@@ -43,7 +46,7 @@ pip install "safetensors>=0.3.1" --no-cache-dir
 pip cache purge
 
 echo "🔥 Installing DFloat11 for lossless compression (32% smaller, 100% quality)..."
-pip install -U "dfloat11[cuda12]" --no-cache-dir
+pip install -U --force-reinstall "dfloat11[cuda12]" --no-cache-dir
 pip cache purge
 
 echo "🎨 Installing latest Diffusers from source..."
@@ -67,6 +70,8 @@ echo "🌍 Setting up environment variables..."
 export HF_HOME=/workspace/.cache/huggingface  # Replace deprecated TRANSFORMERS_CACHE
 export TRANSFORMERS_CACHE=/workspace/.cache/huggingface  # Fallback for compatibility
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True,max_split_size_mb:512"  # Fix memory fragmentation
+export HF_HOME=/workspace/.cache/huggingface
+export TRANSFORMERS_CACHE=/workspace/.cache/huggingface
 export CUDA_LAUNCH_BLOCKING=0  # For better performance
 
 echo "🧹 EMERGENCY: Cleaning disk space and GPU processes..."
@@ -212,7 +217,7 @@ async def lifespan(app: FastAPI):
             "DFloat11/Qwen-Image-DF11",
             device="cpu",  # Official: always CPU first
             cpu_offload=False,  # 32GB+ case 
-            pin_memory=True,  # Try with pin_memory=True first
+            pin_memory=True,  # kernel path validated on 2.5.1
             bfloat16_model=transformer,
         )
         logger.info(f"📊 DFloat11 model loaded, checking compression...")
@@ -299,29 +304,30 @@ async def lifespan(app: FastAPI):
         except Exception as e1:
             logger.error(f"❌ DFloat11 fallback failed: {e1}")
             
-            # Fallback 2: Original Qwen-Image model (GPU only)
+            # Fallback 2: Distilled diffusers model (smaller, GPU only)
             try:
-                logger.info("📋 Fallback 2: Original Qwen-Image (GPU only)...")
+                logger.info("📋 Fallback 2: Qwen-Image Distill (GPU only)...")
                 torch.cuda.empty_cache()
                 gc.collect()
                 
                 pipeline = DiffusionPipeline.from_pretrained(
-                    "Qwen/Qwen-Image",  # Original model without compression
+                    "DiffSynth-Studio/Qwen-Image-Distill-Full",  # Distilled, smaller model
                     torch_dtype=torch.bfloat16,
-                    low_cpu_mem_usage=True,
-                    device_map="auto",
+                    low_cpu_mem_usage=True,  # safe
+                    device_map="cuda",      # avoid 'auto not supported' on this stack
                     use_safetensors=True
                 )
                 
-                # Standard enable_model_cpu_offload  
-                pipeline.enable_model_cpu_offload()
+                # Keep on GPU for speed (distill fits easily)
+                if hasattr(pipeline, "to"):
+                    pipeline = pipeline.to("cuda")
                 
                 # VERIFY: Check device placement
                 if hasattr(pipeline, 'transformer') and pipeline.transformer is not None:
                     transformer_device = next(pipeline.transformer.parameters()).device
                     logger.info(f"🔍 Original model transformer device: {transformer_device}")
                     
-                logger.info("✅ Original Qwen-Image loaded on GPU only")
+                logger.info("✅ Qwen-Image Distill loaded on GPU")
                 
             except Exception as e2:
                 logger.error(f"❌ GPU-only loading failed: {e2}")
