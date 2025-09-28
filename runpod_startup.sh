@@ -66,7 +66,8 @@ echo "Volume (critical):" && df -h /workspace || true
 echo "🌍 Setting up environment variables..."
 export HF_HOME=/workspace/.cache/huggingface  # Replace deprecated TRANSFORMERS_CACHE
 export TRANSFORMERS_CACHE=/workspace/.cache/huggingface  # Fallback for compatibility
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True  # Fix memory fragmentation
+export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True,max_split_size_mb:512"  # Fix memory fragmentation
+export CUDA_LAUNCH_BLOCKING=0  # For better performance
 
 echo "🧹 EMERGENCY: Cleaning disk space and GPU processes..."
 # Kill any existing Python processes
@@ -163,6 +164,11 @@ if torch.cuda.is_available():
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# CRITICAL: Set memory management environment variables BEFORE any model loading
+import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:512"
+os.environ["CUDA_LAUNCH_BLOCKING"] = "0"  # For better performance
+
 # Global pipeline
 pipeline = None
 
@@ -174,6 +180,12 @@ async def lifespan(app: FastAPI):
     
     logger.info("🚀 Loading DFloat11 Qwen-Image - LOSSLESS 32% compression + 100% quality for L40S!")
     
+    # CRITICAL: Maximum memory cleanup before loading
+    import gc
+    torch.cuda.empty_cache()
+    gc.collect()
+    logger.info(f"🧹 Pre-load cleanup: {torch.cuda.memory_allocated() / 1024**3:.1f}GB used, {(torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()) / 1024**3:.1f}GB free")
+    
     # Load the pipeline with optimal settings for Qwen-Image
     try:
         
@@ -183,21 +195,27 @@ async def lifespan(app: FastAPI):
         from diffusers import QwenImageTransformer2DModel
         
         # Load DFloat11 compressed transformer (lossless compression!)
+        # OPTIMIZED: Load transformer without moving to GPU first - let DFloat11 handle placement
         with no_init_weights():
             transformer = QwenImageTransformer2DModel.from_config(
                 QwenImageTransformer2DModel.load_config(
                     "Qwen/Qwen-Image", subfolder="transformer",
                 ),
-            ).to(torch.bfloat16)
+            )  # Keep on CPU initially
         
         # Load DFloat11 compressed weights (32% smaller, bit-identical outputs)
+        # L40S OPTIMIZED: Pure GPU loading with proper memory management
         DFloat11Model.from_pretrained(
             "DFloat11/Qwen-Image-DF11",
-            device="cuda",  # Full GPU for L40S - maximum performance!
-            cpu_offload=False,  # No CPU offload needed with 48GB VRAM
-            pin_memory=True,  # Optimal for L40S
-            bfloat16_model=transformer,
+            device="cuda",  # Direct to GPU - L40S has 48GB!
+            cpu_offload=False,  # Pure GPU operation
+            pin_memory=True,  # Enable for L40S performance
+            bfloat16_model=transformer,  # DFloat11 will handle GPU placement efficiently
         )
+        
+        # CRITICAL: Explicitly move transformer to CUDA after DFloat11 loading
+        transformer = transformer.to("cuda")
+        logger.info("✅ Transformer explicitly moved to CUDA")
         
         # Create pipeline with compressed transformer
         pipeline = DiffusionPipeline.from_pretrained(
@@ -205,28 +223,99 @@ async def lifespan(app: FastAPI):
             transformer=transformer,
             torch_dtype=torch.bfloat16,
         )
+        
+        # CRITICAL: Explicitly move entire pipeline to CUDA
+        pipeline = pipeline.to("cuda")
+        logger.info("✅ Pipeline explicitly moved to CUDA")
+        
+        # VERIFY: Check all components are on CUDA
+        if hasattr(pipeline, 'transformer') and pipeline.transformer is not None:
+            transformer_device = next(pipeline.transformer.parameters()).device
+            logger.info(f"🔍 Transformer device: {transformer_device}")
+        
+        if hasattr(pipeline, 'vae') and pipeline.vae is not None:
+            vae_device = next(pipeline.vae.parameters()).device
+            logger.info(f"🔍 VAE device: {vae_device}")
+            
         logger.info("✅ Qwen-Image model loaded successfully!")
         
     except Exception as e:
-        logger.error(f"❌ Failed to load Qwen-Image model: {e}")
-        logger.info("🔧 Trying alternative loading method...")
+        logger.error(f"❌ Failed to load DFloat11 Qwen-Image: {e}")
+        logger.info("🔧 Trying progressive fallback methods...")
+        
+        # Fallback 1: DFloat11 with memory cleanup
         try:
-            # Fallback: Original model in FP16 (if BF16 fails)
-            pipeline = DiffusionPipeline.from_pretrained(
-                "Qwen/Qwen-Image",  # Same official model, different precision
-                torch_dtype=torch.float16,  # FP16 fallback
-                low_cpu_mem_usage=True,
-                device_map="auto",  # Auto device management
-                use_safetensors=True
+            logger.info("📋 Fallback 1: DFloat11 with memory cleanup...")
+            # Clear GPU memory first
+            torch.cuda.empty_cache()
+            gc.collect()
+            
+            with no_init_weights():
+                transformer = QwenImageTransformer2DModel.from_config(
+                    QwenImageTransformer2DModel.load_config(
+                        "Qwen/Qwen-Image", subfolder="transformer",
+                    ),
+                )  # Keep on CPU initially
+            
+            # Try DFloat11 again with optimized settings
+            DFloat11Model.from_pretrained(
+                "DFloat11/Qwen-Image-DF11",
+                device="cuda",  # Pure GPU - L40S optimized
+                cpu_offload=False,  # GPU only as requested
+                pin_memory=False,  # Disable pinning to reduce memory pressure
+                bfloat16_model=transformer,
             )
-            # Force CPU offloading immediately for fallback
-            if hasattr(pipeline, 'enable_model_cpu_offload'):
-                pipeline.enable_model_cpu_offload()
-                logger.info("🔄 Enabled CPU offloading for fallback method")
-            logger.info("✅ Original Qwen-Image loaded with FP16 fallback")
-        except Exception as e2:
-            logger.error(f"❌ Complete model loading failure: {e2}")
-            raise e2
+            
+            # CRITICAL: Explicitly move to CUDA
+            transformer = transformer.to("cuda")
+            
+            pipeline = DiffusionPipeline.from_pretrained(
+                "Qwen/Qwen-Image",
+                transformer=transformer,
+                torch_dtype=torch.bfloat16,
+            )
+            
+            # CRITICAL: Explicitly move pipeline to CUDA
+            pipeline = pipeline.to("cuda")
+            
+            # VERIFY: Check device placement
+            if hasattr(pipeline, 'transformer') and pipeline.transformer is not None:
+                transformer_device = next(pipeline.transformer.parameters()).device
+                logger.info(f"🔍 Fallback transformer device: {transformer_device}")
+                
+            logger.info("✅ DFloat11 loaded with memory optimization")
+            
+        except Exception as e1:
+            logger.error(f"❌ DFloat11 fallback failed: {e1}")
+            
+            # Fallback 2: Original Qwen-Image model (GPU only)
+            try:
+                logger.info("📋 Fallback 2: Original Qwen-Image (GPU only)...")
+                torch.cuda.empty_cache()
+                gc.collect()
+                
+                pipeline = DiffusionPipeline.from_pretrained(
+                    "Qwen/Qwen-Image",  # Original model without compression
+                    torch_dtype=torch.bfloat16,
+                    low_cpu_mem_usage=False,  # Don't use CPU memory tricks
+                    device_map="cuda",  # Force GPU only
+                    use_safetensors=True
+                )
+                
+                # CRITICAL: Explicitly move to CUDA
+                pipeline = pipeline.to("cuda")
+                
+                # VERIFY: Check device placement
+                if hasattr(pipeline, 'transformer') and pipeline.transformer is not None:
+                    transformer_device = next(pipeline.transformer.parameters()).device
+                    logger.info(f"🔍 Original model transformer device: {transformer_device}")
+                    
+                logger.info("✅ Original Qwen-Image loaded on GPU only")
+                
+            except Exception as e2:
+                logger.error(f"❌ GPU-only loading failed: {e2}")
+                logger.error("💥 L40S memory exhausted. Try restarting container or reducing other processes")
+                raise e2
     
     # Model device placement is handled by device_map="auto"
     if torch.cuda.is_available():
@@ -252,9 +341,10 @@ async def lifespan(app: FastAPI):
         pipeline.enable_vae_tiling()
         logger.info("✅ VAE tiling enabled")
             
-    # L40S has 48GB VRAM - no CPU offload needed, keep everything on GPU for max speed
-    logger.info("🚀 L40S detected: Keeping entire model on GPU for maximum performance!")
-    logger.info("ℹ️ Skipping CPU offload - L40S 48GB VRAM is perfect for full model")
+    # L40S CUDA-ONLY: Maximum performance with 48GB VRAM
+    logger.info("🚀 L40S CUDA-ONLY: Entire model on GPU for maximum performance!")
+    logger.info("💪 48GB VRAM + DFloat11 compression = Perfect fit!")
+    logger.info("⚡ No CPU offload - pure GPU power!")
     
     # Always using native attention for PyTorch 2.8 stability
     logger.info("⚡ Native PyTorch attention active - 100% stable and fast!")
@@ -342,10 +432,10 @@ async def generate_image(request: GenerateRequest):
     logger.info(f"🎨 Generating: {request.prompt[:100]}...")
     
     try:
-        # Set up generator for reproducible results
+        # Set up generator for reproducible results - ALWAYS use CUDA
         generator = None
         if request.seed is not None:
-            generator = torch.Generator(device="cuda" if torch.cuda.is_available() else "cpu")
+            generator = torch.Generator(device="cuda")  # Force CUDA always
             generator.manual_seed(request.seed)
         
         # Generate image
