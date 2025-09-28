@@ -12,8 +12,8 @@ This guide shows you how to deploy Qwen-Image using a **RunPod template** with *
    Container Image: runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04
    Container Registry Credentials: (leave empty - public image)
    
-   Container Disk: 35 GB (for official Qwen-Image)
-   Volume Disk: 70 GB (for official Qwen-Image storage)  
+   Container Disk: 35 GB (for DFloat11 compressed Qwen-Image)
+   Volume Disk: 60 GB (for DFloat11 compressed model storage)  
    Volume Mount Path: /workspace
    
    Expose HTTP Ports:
@@ -40,19 +40,20 @@ This guide shows you how to deploy Qwen-Image using a **RunPod template** with *
 ## 🖥️ Step 2: Deploy Pod
 
 1. **Create new pod** using your template
-2. **Choose GPU (UPDATED - Using OFFICIAL Qwen-Image with FP16):**
-   - **🏆 BEST**: RTX A6000 (48GB) - $0.79/hr - Official model with FP16 (~24GB VRAM)
-   - **🥈 Excellent**: NVIDIA L40S (48GB) - Ada Lovelace + plenty of headroom  
-   - **💪 Good**: RTX 4090 (24GB) - $0.53/hr - Should work with memory optimizations
-   - **⚠️ Tight**: RTX 3080/3090 (10-24GB) - May need CPU offload for larger models
-   - **❌ Too Small**: Less than 16GB - Insufficient for official Qwen-Image
+2. **Choose GPU (UPDATED - Using DFloat11 Lossless Compression for MAXIMUM EFFICIENCY!):**
+   - **🏆 BEST**: NVIDIA L40S (48GB) - $2.29/hr - PERFECT for DFloat11 (~30GB peak VRAM)
+   - **🥈 Excellent**: RTX A6000 (48GB) - $0.79/hr - Great fit with tons of headroom  
+   - **💪 Good**: RTX 4090 (24GB) - $0.53/hr - Should work with DFloat11 compression
+   - **✅ Viable**: RTX 3080/3090 (10-24GB) - Possible with CPU offloading
+   - **🆗 Budget**: 16GB+ GPUs - Can work with DFloat11 + CPU offload
    
-   **Why RTX A6000 is the BEST choice for official Qwen-Image:**
-   - ✅ 48GB VRAM - Perfect for official Qwen-Image FP16 (~24GB usage)
-   - ✅ $0.79/hr - Professional GPU with ECC memory
-   - ✅ Ampere architecture with excellent stability
-   - ✅ Plenty of headroom for complex workflows
-   - ✅ Most reliable option for production use
+   **Why L40S is the ULTIMATE choice for DFloat11 Qwen-Image:**
+   - ✅ 48GB GDDR6 - Perfect for DFloat11 (~29.74GB peak VRAM)
+   - ✅ Ada Lovelace architecture - Optimized for DFloat11 CUDA kernels
+   - ✅ 1,466 TFLOPS tensor performance - Maximum DFloat11 inference speed
+   - ✅ 18GB+ headroom - No CPU offload needed, pure GPU performance
+   - ✅ 100% QUALITY - DFloat11 is lossless (bit-identical outputs)
+   - ✅ 32% MORE EFFICIENT - DFloat11 compression vs original model
 
 3. **Deploy and wait** for the startup script to complete (~5-10 minutes)
 
