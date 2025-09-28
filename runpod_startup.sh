@@ -206,12 +206,13 @@ async def lifespan(app: FastAPI):
             ).to(torch.bfloat16)
         
         # Step 2: EXACT official DFloat11 loading (32GB+ VRAM case)
+        # FIX: Disable pin_memory to prevent black images (known Qwen-Image issue)
         DFloat11Model.from_pretrained(
             "DFloat11/Qwen-Image-DF11",
             device="cpu",  # Official docs: always "cpu" (loading device)
             cpu_offload=False,  # 32GB+ case: no CPU offload (args.cpu_offload=False)
             cpu_offload_blocks=None,  # Default for 32GB+ case
-            pin_memory=True,  # not args.no_pin_memory (default no_pin_memory=False)
+            pin_memory=False,  # FIX: Disable to prevent black images
             bfloat16_model=transformer,
         )
         
@@ -222,11 +223,11 @@ async def lifespan(app: FastAPI):
             torch_dtype=torch.bfloat16,
         )
         
-        # Step 4: ALWAYS use enable_model_cpu_offload() as per official docs
-        # This handles device management properly, even for 32GB+ case
-        pipeline.enable_model_cpu_offload()
-        logger.info("✅ DFloat11 loaded using official 32GB+ pattern")
-        logger.info("✅ Official device management enabled")
+        # Step 4: FIX for black images - use direct GPU placement instead of CPU offload
+        # Black images are caused by attention mechanism issues with cpu_offload
+        pipeline = pipeline.to("cuda")  # Direct GPU placement
+        logger.info("✅ DFloat11 loaded using official 32GB+ pattern") 
+        logger.info("✅ Direct GPU placement (no CPU offload to fix black images)")
         
         # VERIFY: Check all components are on CUDA
         if hasattr(pipeline, 'transformer') and pipeline.transformer is not None:
@@ -276,8 +277,8 @@ async def lifespan(app: FastAPI):
                 torch_dtype=torch.bfloat16,
             )
             
-            # Official device management (required for DFloat11)
-            pipeline.enable_model_cpu_offload()
+            # FIX: Direct GPU placement instead of CPU offload (prevents black images)
+            pipeline = pipeline.to("cuda")
             
             # VERIFY: Check device placement
             if hasattr(pipeline, 'transformer') and pipeline.transformer is not None:
@@ -303,8 +304,8 @@ async def lifespan(app: FastAPI):
                     use_safetensors=True
                 )
                 
-                # Standard device management
-                pipeline.enable_model_cpu_offload()
+                # FIX: Direct GPU placement (prevents black images)  
+                pipeline = pipeline.to("cuda")
                 
                 # VERIFY: Check device placement
                 if hasattr(pipeline, 'transformer') and pipeline.transformer is not None:
@@ -374,7 +375,7 @@ app = FastAPI(
 
 class GenerateRequest(BaseModel):
     prompt: str
-    negative_prompt: Optional[str] = None
+    negative_prompt: Optional[str] = "blurry, low quality, distorted"  # Default to enable CFG
     width: int = 1024
     height: int = 1024
     num_inference_steps: int = 50
@@ -434,16 +435,11 @@ async def generate_image(request: GenerateRequest):
     
     try:
         # Set up generator for reproducible results 
-        # Match device to pipeline's device (auto-detect)
+        # For DFloat11 with enable_model_cpu_offload, always use cuda
         generator = None
         if request.seed is not None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            # Try to match pipeline's device if possible
-            if hasattr(pipeline, 'device'):
-                device = str(pipeline.device)
-            elif hasattr(pipeline, '_device'):
-                device = str(pipeline._device)
-                
+            # DFloat11 with enable_model_cpu_offload: generator must be cuda
+            device = "cuda"
             generator = torch.Generator(device=device)
             generator.manual_seed(request.seed)
             logger.info(f"🎲 Generator device: {device}")
