@@ -205,10 +205,6 @@ async def lifespan(app: FastAPI):
             transformer=transformer,
             torch_dtype=torch.bfloat16,
         )
-        
-        # ONLY FIX: Ensure ALL components are on the same device (GPU) - this was the ONLY issue!
-        pipeline = pipeline.to("cuda")
-        logger.info("✅ All pipeline components moved to GPU")
         logger.info("✅ Qwen-Image model loaded successfully!")
         
     except Exception as e:
@@ -220,12 +216,10 @@ async def lifespan(app: FastAPI):
                 "Qwen/Qwen-Image",  # Same official model, different precision
                 torch_dtype=torch.float16,  # FP16 fallback
                 low_cpu_mem_usage=True,
+                device_map="auto",  # Auto device management
                 use_safetensors=True
             )
-            # Fix device mismatch in fallback too
-            pipeline = pipeline.to("cuda")
-            
-            # Force CPU offloading immediately for fallback (if needed)
+            # Force CPU offloading immediately for fallback
             if hasattr(pipeline, 'enable_model_cpu_offload'):
                 pipeline.enable_model_cpu_offload()
                 logger.info("🔄 Enabled CPU offloading for fallback method")

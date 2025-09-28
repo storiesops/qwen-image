@@ -48,12 +48,12 @@ This guide shows you how to deploy Qwen-Image using a **RunPod template** with *
    - **🆗 Budget**: 16GB+ GPUs - Can work with DFloat11 + CPU offload
    
    **Why L40S is the ULTIMATE choice for DFloat11 Qwen-Image:**
-       - ✅ 48GB GDDR6 - Perfect for DFloat11 (~29.74GB peak VRAM)
-       - ✅ Ada Lovelace architecture - Optimized for DFloat11 CUDA kernels
-       - ✅ 1,466 TFLOPS tensor performance - Maximum DFloat11 inference speed
-       - ✅ 18GB+ headroom - No CPU offload needed, pure GPU performance
-       - ✅ 100% QUALITY - DFloat11 is lossless (bit-identical outputs)
-       - ✅ 32% MORE EFFICIENT - DFloat11 compression vs original model
+   - ✅ 48GB GDDR6 - Perfect for DFloat11 (~29.74GB peak VRAM)
+   - ✅ Ada Lovelace architecture - Optimized for DFloat11 CUDA kernels
+   - ✅ 1,466 TFLOPS tensor performance - Maximum DFloat11 inference speed
+   - ✅ 18GB+ headroom - No CPU offload needed, pure GPU performance
+   - ✅ 100% QUALITY - DFloat11 is lossless (bit-identical outputs)
+   - ✅ 32% MORE EFFICIENT - DFloat11 compression vs original model
 
 3. **Deploy and wait** for the startup script to complete (~5-10 minutes)
 
