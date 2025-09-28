@@ -45,8 +45,9 @@ pip install "safetensors>=0.3.1" --no-cache-dir
 # Clean cache after each install
 pip cache purge
 
-echo "🔥 Installing DFloat11 for lossless compression (32% smaller, 100% quality)..."
-pip install -U --force-reinstall "dfloat11[cuda12]" --no-cache-dir
+echo "🔥 Installing DFloat11 for lossless compression (pin deps, DO NOT change torch)..."
+# IMPORTANT: prevent pip from upgrading torch back to 2.8.0 via transitive deps
+pip install --no-deps --force-reinstall "dfloat11[cuda12]==0.5.0" --no-cache-dir
 pip cache purge
 
 echo "🎨 Installing latest Diffusers from source..."
