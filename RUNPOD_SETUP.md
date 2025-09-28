@@ -48,11 +48,12 @@ This guide shows you how to deploy Qwen-Image using a **RunPod template** with *
    - **❌ Won't Work**: RTX 3080/3090 - Old architecture + insufficient VRAM
    
    **Why L40S is the NEW top choice:**
-   - ✅ Ada Lovelace architecture (newer than Ampere, excellent FlashAttention-2)
+   - ✅ Ada Lovelace architecture (newer than Ampere, excellent FlashAttention-2 support)
    - ✅ 48GB GDDR6 with ECC (perfect for Qwen-Image BF16 ~44GB usage)
    - ✅ 1,466 TFLOPS tensor performance (faster than A6000)
    - ✅ Native FP8 + BF16 support (optimal for our model)
    - ✅ Officially tested with Qwen models by NVIDIA
+   - ✅ Best FlashAttention-2 performance (20-30% faster than native attention)
 
 3. **Deploy and wait** for the startup script to complete (~5-10 minutes)
 
@@ -140,15 +141,16 @@ if __name__ == "__main__":
         print("🎨 Image saved as qwen_generated.png")
 ```
 
-## 🔧 Advantages of This Updated Approach
+## 🔧 Advantages of This SMART Approach
 
 ✅ **Proper dependency versions** - transformers>=4.51.3 (required for Qwen-Image)
-✅ **FlashAttention-2 support** - 20-30% faster on RTX A6000 Ampere
-✅ **No xformers conflicts** - eliminated PyTorch version issues
+✅ **Multi-strategy FlashAttention-2** - tries 7 different installation methods
+✅ **Graceful fallbacks** - uses native attention if FlashAttention fails
+✅ **Version compatibility** - tests multiple FlashAttention versions with PyTorch 2.8
 ✅ **BF16 precision** - most stable for Qwen-Image model
 ✅ **Trust remote code** - enables Qwen model loading
 ✅ **Auto device mapping** - optimal GPU memory usage
-✅ **Comprehensive error handling** - fallback loading methods
+✅ **Smart performance optimization** - FlashAttention if available, native if not
 
 ## 🎨 Qwen-Image Specialties
 
