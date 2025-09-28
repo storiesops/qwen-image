@@ -205,23 +205,32 @@ async def lifespan(app: FastAPI):
                 ),
             ).to(torch.bfloat16)
         
-        # Step 2: EXACT official DFloat11 loading (32GB+ VRAM case)
-        # FIX: Disable pin_memory to prevent black images (known Qwen-Image issue)
-        DFloat11Model.from_pretrained(
+        # Step 2: EXACT official DFloat11 loading - CRITICAL FIX
+        # The DFloat11Model.from_pretrained modifies transformer IN-PLACE
+        logger.info("📦 Loading DFloat11 compressed weights...")
+        compressed_model = DFloat11Model.from_pretrained(
             "DFloat11/Qwen-Image-DF11",
-            device="cpu",  # Official docs: always "cpu" (loading device)
-            cpu_offload=False,  # 32GB+ case: no CPU offload (args.cpu_offload=False)
-            cpu_offload_blocks=None,  # Default for 32GB+ case
-            pin_memory=False,  # FIX: Disable to prevent black images
+            device="cpu",  # Official: always CPU first
+            cpu_offload=False,  # 32GB+ case 
+            pin_memory=True,  # Try with pin_memory=True first
             bfloat16_model=transformer,
         )
+        logger.info(f"📊 DFloat11 model loaded, checking compression...")
         
-        # Step 3: Create pipeline exactly as docs show
+        # Step 3: Create pipeline with DFloat11-modified transformer
+        logger.info("🔧 Creating pipeline with compressed transformer...")
         pipeline = DiffusionPipeline.from_pretrained(
             model_name,
-            transformer=transformer,
+            transformer=transformer,  # This should now contain DFloat11 compressed weights
             torch_dtype=torch.bfloat16,
         )
+        
+        # CRITICAL: Verify the transformer actually has compressed weights
+        transformer_memory = sum(p.numel() * p.element_size() for p in transformer.parameters()) / (1024**3)
+        logger.info(f"🧮 Transformer memory usage: {transformer_memory:.2f} GB")
+        if transformer_memory > 35:  # If > 35GB, compression failed
+            logger.error("❌ DFloat11 compression FAILED - transformer still full size!")
+            raise RuntimeError("DFloat11 compression did not work")
         
         # Step 4: EXACT official pattern - ALWAYS use enable_model_cpu_offload()
         # This is required for DFloat11 to work properly (even for 48GB VRAM)
