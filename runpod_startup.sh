@@ -131,7 +131,7 @@ async def load_model():
             torch_dtype=torch.bfloat16,  # BF16 is most stable for Qwen-Image
             use_safetensors=True,
             trust_remote_code=True,  # Required for Qwen models
-            device_map="auto"  # Automatic device mapping
+            device_map="cuda"  # Direct CUDA GPU placement
         )
         logger.info("✅ Qwen-Image model loaded successfully!")
         
@@ -144,7 +144,8 @@ async def load_model():
                 "Qwen/Qwen-Image",
                 torch_dtype=torch.float16,  # Try FP16 as fallback
                 use_safetensors=True,
-                trust_remote_code=True
+                trust_remote_code=True,
+                device_map="cuda"  # Direct CUDA GPU placement for fallback too
             )
             logger.info("✅ Model loaded with FP16 fallback")
         except Exception as e2:
