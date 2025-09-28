@@ -194,39 +194,35 @@ async def lifespan(app: FastAPI):
         from dfloat11 import DFloat11Model
         from diffusers import QwenImageTransformer2DModel
         
-        # Load DFloat11 compressed transformer (lossless compression!)
-        # OPTIMIZED: Load transformer without moving to GPU first - let DFloat11 handle placement
+        # EXACT OFFICIAL PATTERN: 32GB+ VRAM case (L40S has 48GB)
+        model_name = "Qwen/Qwen-Image"
+        
+        # Step 1: Load transformer config exactly as docs show
         with no_init_weights():
             transformer = QwenImageTransformer2DModel.from_config(
                 QwenImageTransformer2DModel.load_config(
-                    "Qwen/Qwen-Image", subfolder="transformer",
+                    model_name, subfolder="transformer",
                 ),
-            )  # Keep on CPU initially
+            ).to(torch.bfloat16)
         
-        # Load DFloat11 compressed weights (32% smaller, bit-identical outputs)
-        # L40S OPTIMIZED: Pure GPU loading with proper memory management
+        # Step 2: EXACT official DFloat11 loading (32GB+ VRAM case)
         DFloat11Model.from_pretrained(
             "DFloat11/Qwen-Image-DF11",
-            device="cuda",  # Direct to GPU - L40S has 48GB!
-            cpu_offload=False,  # Pure GPU operation
-            pin_memory=True,  # Enable for L40S performance
-            bfloat16_model=transformer,  # DFloat11 will handle GPU placement efficiently
+            device="cpu",  # Official docs: always "cpu" (loading device)
+            cpu_offload=False,  # 32GB+ case: no CPU offload (args.cpu_offload=False)
+            cpu_offload_blocks=None,  # Default for 32GB+ case
+            pin_memory=True,  # not args.no_pin_memory (default no_pin_memory=False)
+            bfloat16_model=transformer,
         )
         
-        # CRITICAL: Explicitly move transformer to CUDA after DFloat11 loading
-        transformer = transformer.to("cuda")
-        logger.info("✅ Transformer explicitly moved to CUDA")
-        
-        # Create pipeline with compressed transformer
+        # Step 3: Create pipeline exactly as docs show
         pipeline = DiffusionPipeline.from_pretrained(
-            "Qwen/Qwen-Image",
+            model_name,
             transformer=transformer,
             torch_dtype=torch.bfloat16,
         )
         
-        # CRITICAL: Explicitly move entire pipeline to CUDA
-        pipeline = pipeline.to("cuda")
-        logger.info("✅ Pipeline explicitly moved to CUDA")
+        logger.info("✅ DFloat11 loaded using official 32GB+ pattern")
         
         # VERIFY: Check all components are on CUDA
         if hasattr(pipeline, 'transformer') and pipeline.transformer is not None:
@@ -250,33 +246,31 @@ async def lifespan(app: FastAPI):
             torch.cuda.empty_cache()
             gc.collect()
             
+            # Fallback: Try official pattern with cleanup
+            model_name = "Qwen/Qwen-Image"
+            
             with no_init_weights():
                 transformer = QwenImageTransformer2DModel.from_config(
                     QwenImageTransformer2DModel.load_config(
-                        "Qwen/Qwen-Image", subfolder="transformer",
+                        model_name, subfolder="transformer",
                     ),
-                )  # Keep on CPU initially
+                ).to(torch.bfloat16)
             
-            # Try DFloat11 again with optimized settings
+            # Official DFloat11 loading (32GB+ case)
             DFloat11Model.from_pretrained(
                 "DFloat11/Qwen-Image-DF11",
-                device="cuda",  # Pure GPU - L40S optimized
-                cpu_offload=False,  # GPU only as requested
-                pin_memory=False,  # Disable pinning to reduce memory pressure
+                device="cpu",  # Official: always "cpu"
+                cpu_offload=False,  # 32GB+ case
+                cpu_offload_blocks=None,
+                pin_memory=False,  # Conservative for fallback
                 bfloat16_model=transformer,
             )
             
-            # CRITICAL: Explicitly move to CUDA
-            transformer = transformer.to("cuda")
-            
             pipeline = DiffusionPipeline.from_pretrained(
-                "Qwen/Qwen-Image",
+                model_name,
                 transformer=transformer,
                 torch_dtype=torch.bfloat16,
             )
-            
-            # CRITICAL: Explicitly move pipeline to CUDA
-            pipeline = pipeline.to("cuda")
             
             # VERIFY: Check device placement
             if hasattr(pipeline, 'transformer') and pipeline.transformer is not None:
@@ -297,13 +291,12 @@ async def lifespan(app: FastAPI):
                 pipeline = DiffusionPipeline.from_pretrained(
                     "Qwen/Qwen-Image",  # Original model without compression
                     torch_dtype=torch.bfloat16,
-                    low_cpu_mem_usage=False,  # Don't use CPU memory tricks
-                    device_map="cuda",  # Force GPU only
+                    low_cpu_mem_usage=True,  # Fix the error
+                    device_map="auto",  # Auto device management
                     use_safetensors=True
                 )
                 
-                # CRITICAL: Explicitly move to CUDA
-                pipeline = pipeline.to("cuda")
+                # L40S 48GB: NO CPU offload - pure GPU operation
                 
                 # VERIFY: Check device placement
                 if hasattr(pipeline, 'transformer') and pipeline.transformer is not None:
