@@ -17,14 +17,37 @@ if [ ! -d "Qwen-Image" ]; then
 fi
 cd Qwen-Image
 
-# Install Python dependencies
-echo "🐍 Installing Python dependencies..."
+# Install Python dependencies with PROPER VERSIONS
+echo "🐍 Installing Python dependencies with verified compatibility..."
+
+# Upgrade pip first
 pip install --upgrade pip
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-pip install transformers>=4.35.0 diffusers>=0.24.0 accelerate>=0.24.0
-pip install fastapi uvicorn[standard] pydantic requests pillow
+
+echo "🔥 Installing PyTorch with CUDA 12.8 support..."
+# Use the exact PyTorch version that works with RunPod's CUDA 12.8
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+echo "🤗 Installing Hugging Face libraries with correct versions..."
+# Qwen-Image specifically requires transformers>=4.51.3 for Qwen2.5-VL support  
+pip install "transformers>=4.51.3"
+pip install "accelerate>=0.26.1"
+pip install "safetensors>=0.3.1"
+
+echo "🎨 Installing latest Diffusers from source..."
+# Always use latest diffusers for best Qwen-Image support
 pip install git+https://github.com/huggingface/diffusers
-pip install xformers --no-deps
+
+echo "🚀 Installing FastAPI stack..."
+pip install "fastapi>=0.100.0" "uvicorn[standard]>=0.23.0" "pydantic>=2.0.0"
+
+echo "🖼️ Installing image processing libraries..."
+pip install "pillow>=10.0.0" requests
+
+echo "⚡ Installing FlashAttention-2 (works on RTX A6000 Ampere architecture)..."
+# FlashAttention-2 is preferred over xformers for Ampere GPUs
+pip install flash-attn --no-build-isolation || echo "⚠️ FlashAttention-2 install failed, using native attention"
+
+echo "ℹ️ Skipping xformers - using FlashAttention-2 instead for better compatibility"
 
 # Create our simple API wrapper
 echo "🔧 Creating FastAPI wrapper..."
@@ -39,6 +62,7 @@ import sys
 import logging
 import asyncio
 from typing import Optional, List
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -47,6 +71,7 @@ import uvicorn
 from PIL import Image
 import base64
 import io
+
 from diffusers import DiffusionPipeline
 
 # Setup logging
@@ -91,26 +116,35 @@ async def load_model():
     logger.info("🚀 Loading Qwen-Image model...")
     
     try:
-        # Load the pipeline with quantization for better memory efficiency
+        # Load the pipeline with optimal settings for Qwen-Image
         try:
-            # Try to load FP8 quantized version first (saves ~50% VRAM)
-            logger.info("🔥 Attempting to load FP8 quantized model...")
+            logger.info("🚀 Loading Qwen-Image model with BF16 precision...")
+            
+            # Load with the most reliable settings for Qwen-Image
             pipeline = DiffusionPipeline.from_pretrained(
                 "Qwen/Qwen-Image",
-                torch_dtype=torch.float8_e4m3fn if hasattr(torch, 'float8_e4m3fn') else torch.bfloat16,
+                torch_dtype=torch.bfloat16,  # BF16 is most stable for Qwen-Image
                 use_safetensors=True,
-                variant="fp8"
+                trust_remote_code=True,  # Required for Qwen models
+                device_map="auto"  # Automatic device mapping
             )
-            logger.info("✅ FP8 quantized model loaded successfully!")
+            logger.info("✅ Qwen-Image model loaded successfully!")
+            
         except Exception as e:
-            logger.warning(f"⚠️ FP8 model not available, falling back to BF16: {e}")
-            # Fallback to standard BF16 model
-            pipeline = DiffusionPipeline.from_pretrained(
-                "Qwen/Qwen-Image", 
-                torch_dtype=torch.bfloat16,
-                use_safetensors=True
-            )
-            logger.info("✅ BF16 model loaded (requires more VRAM)")
+            logger.error(f"❌ Failed to load Qwen-Image model: {e}")
+            logger.info("🔧 Trying alternative loading method...")
+            try:
+                # Fallback loading method
+                pipeline = DiffusionPipeline.from_pretrained(
+                    "Qwen/Qwen-Image",
+                    torch_dtype=torch.float16,  # Try FP16 as fallback
+                    use_safetensors=True,
+                    trust_remote_code=True
+                )
+                logger.info("✅ Model loaded with FP16 fallback")
+            except Exception as e2:
+                logger.error(f"❌ Complete model loading failure: {e2}")
+                raise e2
         
         if torch.cuda.is_available():
             pipeline = pipeline.to("cuda")
