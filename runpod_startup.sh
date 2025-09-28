@@ -43,27 +43,8 @@ pip install "fastapi>=0.100.0" "uvicorn[standard]>=0.23.0" "pydantic>=2.0.0"
 echo "🖼️ Installing image processing libraries..."
 pip install "pillow>=10.0.0" requests
 
-echo "⚡ Trying FlashAttention-2 installation strategies for PyTorch 2.8 compatibility..."
-
-# Strategy 1: Install prerequisites and let pip decide version
-echo "📦 Installing FlashAttention prerequisites..."
-pip install packaging ninja wheel setuptools --upgrade
-
-# Strategy 2: Try multiple installation methods
-echo "🔄 Attempting FlashAttention-2 installation methods..."
-
-# Method 1: Latest version with no build isolation
-(pip install flash-attn --no-build-isolation --no-cache-dir && echo "✅ Method 1 (latest) succeeded") ||
-# Method 2: Specific versions known to work with PyTorch 2.8
-(pip install flash-attn==2.8.3 --no-build-isolation --force-reinstall && echo "✅ Method 2 (v2.8.3) succeeded") ||
-(pip install flash-attn==2.8.2 --no-build-isolation --force-reinstall && echo "✅ Method 3 (v2.8.2) succeeded") ||
-(pip install flash-attn==2.8.1 --no-build-isolation --force-reinstall && echo "✅ Method 4 (v2.8.1) succeeded") ||
-(pip install flash-attn==2.8.0 --no-build-isolation --force-reinstall && echo "✅ Method 5 (v2.8.0) succeeded") ||
-# Method 3: Compile with limited resources
-(MAX_JOBS=2 pip install flash-attn --no-build-isolation --no-cache-dir && echo "✅ Method 6 (limited jobs) succeeded") ||
-# Method 4: Try pre-release version
-(pip install --pre flash-attn --no-build-isolation && echo "✅ Method 7 (pre-release) succeeded") ||
-echo "⚠️ All FlashAttention installation methods failed, using native attention"
+echo "🚫 SKIPPING FlashAttention-2 - causes crashes with PyTorch 2.8 dev even when gracefully handled"
+echo "⚡ Using native PyTorch attention (100% reliable, still fast!)"
 
 # Create our simple API wrapper
 echo "🔧 Creating FastAPI wrapper..."
@@ -88,17 +69,14 @@ from PIL import Image
 import base64
 import io
 
-# Try to use FlashAttention-2 if available, fallback gracefully
-try:
-    import flash_attn
-    print("✅ FlashAttention-2 available:", flash_attn.__version__)
-    FLASH_ATTN_AVAILABLE = True
-except ImportError as e:
-    print("⚠️ FlashAttention-2 not available:", str(e))
-    print("   Using native PyTorch attention (still fast!)")
-    FLASH_ATTN_AVAILABLE = False
-    import os
-    os.environ["FLASH_ATTENTION_FORCE_DISABLE"] = "1"
+# Force disable FlashAttention to prevent diffusers from auto-importing it
+import os
+os.environ["FLASH_ATTENTION_FORCE_DISABLE"] = "1"
+os.environ["DISABLE_FLASH_ATTN"] = "1"
+
+# FlashAttention causes PyTorch 2.8 dev crashes - using native attention
+FLASH_ATTN_AVAILABLE = False
+print("⚡ Using native PyTorch attention (100% compatible, still excellent!)")
 
 from diffusers import DiffusionPipeline
 
@@ -202,11 +180,8 @@ async def load_model():
         else:
             logger.info("ℹ️ CPU offload skipped (sufficient VRAM available)")
     
-    # Log FlashAttention status
-    if FLASH_ATTN_AVAILABLE:
-        logger.info(f"🚀 FlashAttention-2 active: {flash_attn.__version__} - expect 20-30% speed boost!")
-    else:
-        logger.info("⚡ Native PyTorch attention active - still excellent performance!")
+    # Always using native attention for PyTorch 2.8 stability
+    logger.info("⚡ Native PyTorch attention active - 100% stable and fast!")
         
     # Force garbage collection
     import gc
