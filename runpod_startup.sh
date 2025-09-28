@@ -48,6 +48,11 @@ pip cache purge
 echo "🔥 Installing DFloat11 for lossless compression (pin deps, DO NOT change torch)..."
 # IMPORTANT: prevent pip from upgrading torch back to 2.8.0 via transitive deps
 pip install --no-deps --force-reinstall "dfloat11[cuda12]==0.5.0" --no-cache-dir
+
+# DFloat11 runtime deps we must install explicitly when using --no-deps
+echo "📦 Installing CuPy (CUDA 12.x) + fastrlock for DFloat11 kernels..."
+pip install --no-cache-dir --force-reinstall \
+  cupy-cuda12x==13.6.0 fastrlock==0.8.3
 pip cache purge
 
 echo "🎨 Installing latest Diffusers from source..."
