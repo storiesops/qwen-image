@@ -53,6 +53,9 @@ pip install --no-deps --force-reinstall "dfloat11[cuda12]==0.5.0" --no-cache-dir
 echo "📦 Installing CuPy (CUDA 12.x) + fastrlock for DFloat11 kernels..."
 pip install --no-cache-dir --force-reinstall \
   cupy-cuda12x==13.6.0 fastrlock==0.8.3
+
+echo "📦 Installing dahuffman (DFloat11 dependency for Huffman codec)..."
+pip install --no-cache-dir --force-reinstall dahuffman==0.3.2
 pip cache purge
 
 echo "🎨 Installing latest Diffusers from source..."
