@@ -55,7 +55,7 @@ pip install --no-cache-dir --force-reinstall \
   cupy-cuda12x==13.6.0 fastrlock==0.8.3
 
 echo "📦 Installing dahuffman (DFloat11 dependency for Huffman codec)..."
-pip install --no-cache-dir --force-reinstall dahuffman==0.3.2
+pip install --no-cache-dir --force-reinstall dahuffman==0.4.2
 pip cache purge
 
 echo "🎨 Installing latest Diffusers from source..."
