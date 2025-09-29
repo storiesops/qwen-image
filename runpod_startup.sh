@@ -246,11 +246,9 @@ async def lifespan(app: FastAPI):
             logger.error("❌ DFloat11 compression FAILED - transformer still full size!")
             raise RuntimeError("DFloat11 compression did not work")
         
-        # Step 4: EXACT official pattern - ALWAYS use enable_model_cpu_offload()
-        # This is required for DFloat11 to work properly (even for 48GB VRAM)
-        pipeline.enable_model_cpu_offload()
-        logger.info("✅ DFloat11 loaded using EXACT official pattern")
-        logger.info("✅ Model size should be 28.42GB (not 40GB)")
+        # Step 4: Keep full model resident in VRAM for low latency
+        pipeline = pipeline.to("cuda")
+        logger.info("✅ DFloat11 loaded and placed on CUDA (full VRAM residency)")
         
         # VERIFY: Check all components are on CUDA
         if hasattr(pipeline, 'transformer') and pipeline.transformer is not None:
@@ -355,22 +353,31 @@ async def lifespan(app: FastAPI):
         logger.info("⚠️ Running on CPU (will be slow)")
         
     # Enable ALL memory optimizations for better VRAM usage
-    if hasattr(pipeline, 'enable_attention_slicing'):
-        pipeline.enable_attention_slicing()
-        logger.info("✅ Attention slicing enabled")
-        
-    if hasattr(pipeline, 'enable_vae_slicing'):
-        pipeline.enable_vae_slicing()
-        logger.info("✅ VAE slicing enabled")
-        
-    if hasattr(pipeline, 'enable_vae_tiling'):
-        pipeline.enable_vae_tiling()
-        logger.info("✅ VAE tiling enabled")
+    # Disable slicing/tiling for maximum throughput (we have VRAM)
+    pass
             
     # L40S CUDA-ONLY: Maximum performance with 48GB VRAM
     logger.info("🚀 L40S CUDA-ONLY: Entire model on GPU for maximum performance!")
     logger.info("💪 48GB VRAM + DFloat11 compression = Perfect fit!")
     logger.info("⚡ No CPU offload - pure GPU power!")
+    
+    # Warm up CUDA to reduce first-request latency
+    try:
+        logger.info("🔧 CUDA warmup (1 step @128x128)...")
+        with torch.inference_mode():
+            _ = pipeline(
+                prompt="warmup",
+                width=128,
+                height=128,
+                num_inference_steps=1,
+                true_cfg_scale=4.0,
+                generator=torch.Generator(device="cuda").manual_seed(0)
+            )
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        logger.info("✅ Warmup done")
+    except Exception as _warmup_err:
+        logger.warning(f"⚠️ Warmup skipped: {_warmup_err}")
     
     # Always using native attention for PyTorch 2.8 stability
     logger.info("⚡ Native PyTorch attention active - 100% stable and fast!")

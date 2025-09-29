@@ -8,7 +8,7 @@ import time
 from datetime import datetime
 
 # Your API endpoint
-API_URL = "https://v9edjr0o921q6q-8000.proxy.runpod.net"
+API_URL = "https://03qy4tdw1dgtxh-8000.proxy.runpod.net/"
 
 def test_api_health():
     """Test if API is responding"""
@@ -41,10 +41,13 @@ def generate_image(prompt, width=512, height=512, num_inference_steps=20):
     print(f"\n[*] Generating image: '{prompt}'")
     
     payload = {
-        "prompt": prompt,
-        "width": width,
-        "height": height,
-        "num_inference_steps": num_inference_steps
+  "prompt": prompt,
+  "negative_prompt": "blurry, low quality, distorted",
+  "width": 1024,
+  "height": 1024,
+  "num_inference_steps": 50,
+  "true_cfg_scale": 4,
+  "seed": 0
     }
     
     print(f"[>] Parameters: {json.dumps(payload, indent=2)}")
