@@ -233,29 +233,27 @@ async def lifespan(app: FastAPI):
             logger.info("✅ Nunchaku Qwen-Image (INT4) loaded on GPU")
             # skip DF11 branch entirely
         else:
-        
-        # Step 1: Load transformer config exactly as docs show
-        with no_init_weights():
-            transformer = QwenImageTransformer2DModel.from_config(
-                QwenImageTransformer2DModel.load_config(
-                    model_name, subfolder="transformer",
-                ),
-            ).to(torch.bfloat16)
-        
-        # Step 2: EXACT official DFloat11 loading - CRITICAL FIX
-        # The DFloat11Model.from_pretrained modifies transformer IN-PLACE
-        logger.info("📦 Loading DFloat11 compressed weights...")
-        compressed_model = DFloat11Model.from_pretrained(
-            "DFloat11/Qwen-Image-DF11",
-            device="cpu",  # Official: always CPU first
-            cpu_offload=False,  # 32GB+ case 
-            pin_memory=True,  # kernel path validated on 2.5.1
-            bfloat16_model=transformer,
-        )
-        logger.info(f"📊 DFloat11 model loaded, checking compression...")
-        
-        # If DF11 branch active, create pipeline with transformer
-        if preferred != "NUNCHAKU":
+            # Step 1: Load transformer config exactly as docs show
+            with no_init_weights():
+                transformer = QwenImageTransformer2DModel.from_config(
+                    QwenImageTransformer2DModel.load_config(
+                        model_name, subfolder="transformer",
+                    ),
+                ).to(torch.bfloat16)
+
+            # Step 2: EXACT official DFloat11 loading - CRITICAL FIX
+            # The DFloat11Model.from_pretrained modifies transformer IN-PLACE
+            logger.info("📦 Loading DFloat11 compressed weights...")
+            compressed_model = DFloat11Model.from_pretrained(
+                "DFloat11/Qwen-Image-DF11",
+                device="cpu",  # Official: always CPU first
+                cpu_offload=False,  # 32GB+ case 
+                pin_memory=True,  # kernel path validated on 2.5.1
+                bfloat16_model=transformer,
+            )
+            logger.info(f"📊 DFloat11 model loaded, checking compression...")
+
+            # Create pipeline with transformer
             logger.info("🔧 Creating pipeline with selected model...")
             pipeline = DiffusionPipeline.from_pretrained(
                 model_name,
