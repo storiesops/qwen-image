@@ -152,6 +152,8 @@ import uvicorn
 from PIL import Image
 import base64
 import io
+import uuid
+import uuid
 
 # Force disable FlashAttention to prevent diffusers from auto-importing it
 import os
@@ -185,6 +187,10 @@ os.environ["CUDA_LAUNCH_BLOCKING"] = "0"  # For better performance
 
 # Global pipeline
 pipeline = None
+# Async jobs memory store
+jobs = {}
+# In-memory async job store
+jobs = {}
 
 # Modern FastAPI lifespan handler (replaces deprecated on_event)
 @asynccontextmanager
@@ -208,8 +214,25 @@ async def lifespan(app: FastAPI):
         from dfloat11 import DFloat11Model
         from diffusers import QwenImageTransformer2DModel
         
-        # EXACT OFFICIAL PATTERN: 32GB+ VRAM case (L40S has 48GB)
+        # Select base via env (DF11 | NUNCHAKU)
+        preferred = os.environ.get("DEFAULT_MODEL", "DF11").upper()
         model_name = "Qwen/Qwen-Image"
+
+        # If NUNCHAKU requested, load it immediately and skip DF11 path
+        if preferred == "NUNCHAKU":
+            logger.info("📋 DEFAULT_MODEL=NUNCHAKU → loading Nunchaku INT4 on CUDA...")
+            pipeline = DiffusionPipeline.from_pretrained(
+                "nunchaku-tech/nunchaku-qwen-image",
+                torch_dtype=torch.bfloat16,
+                low_cpu_mem_usage=True,
+                device_map="cuda",
+                use_safetensors=True,
+            )
+            if hasattr(pipeline, "to"):
+                pipeline = pipeline.to("cuda")
+            logger.info("✅ Nunchaku Qwen-Image (INT4) loaded on GPU")
+            # skip DF11 branch entirely
+        else:
         
         # Step 1: Load transformer config exactly as docs show
         with no_init_weights():
@@ -231,13 +254,14 @@ async def lifespan(app: FastAPI):
         )
         logger.info(f"📊 DFloat11 model loaded, checking compression...")
         
-        # Step 3: Create pipeline with DFloat11-modified transformer
-        logger.info("🔧 Creating pipeline with compressed transformer...")
-        pipeline = DiffusionPipeline.from_pretrained(
-            model_name,
-            transformer=transformer,  # This should now contain DFloat11 compressed weights
-            torch_dtype=torch.bfloat16,
-        )
+        # If DF11 branch active, create pipeline with transformer
+        if preferred != "NUNCHAKU":
+            logger.info("🔧 Creating pipeline with selected model...")
+            pipeline = DiffusionPipeline.from_pretrained(
+                model_name,
+                transformer=transformer,
+                torch_dtype=torch.bfloat16,
+            )
         
         # CRITICAL: Verify the transformer actually has compressed weights
         transformer_memory = sum(p.numel() * p.element_size() for p in transformer.parameters()) / (1024**3)
@@ -311,17 +335,17 @@ async def lifespan(app: FastAPI):
         except Exception as e1:
             logger.error(f"❌ DFloat11 fallback failed: {e1}")
             
-            # Fallback 2: Distilled diffusers model (smaller, GPU only)
+            # Fallback 2: Nunchaku INT4 (smaller, faster)
             try:
-                logger.info("📋 Fallback 2: Qwen-Image Distill (GPU only)...")
+                logger.info("📋 Fallback 2: Nunchaku INT4 (GPU only)...")
                 torch.cuda.empty_cache()
                 gc.collect()
                 
                 pipeline = DiffusionPipeline.from_pretrained(
-                    "DiffSynth-Studio/Qwen-Image-Distill-Full",  # Distilled, smaller model
+                    "nunchaku-tech/nunchaku-qwen-image",
                     torch_dtype=torch.bfloat16,
-                    low_cpu_mem_usage=True,  # safe
-                    device_map="cuda",      # avoid 'auto not supported' on this stack
+                    low_cpu_mem_usage=True,
+                    device_map="cuda",
                     use_safetensors=True
                 )
                 
@@ -334,7 +358,7 @@ async def lifespan(app: FastAPI):
                     transformer_device = next(pipeline.transformer.parameters()).device
                     logger.info(f"🔍 Original model transformer device: {transformer_device}")
                     
-                logger.info("✅ Qwen-Image Distill loaded on GPU")
+                logger.info("✅ Nunchaku Qwen-Image (INT4) loaded on GPU")
                 
             except Exception as e2:
                 logger.error(f"❌ GPU-only loading failed: {e2}")
@@ -507,6 +531,78 @@ async def generate_image(request: GenerateRequest):
     except Exception as e:
         logger.error(f"❌ Generation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# ----------------------
+# Async job API
+# ----------------------
+
+class GenerateJobStatus(BaseModel):
+    job_id: str
+    status: str  # queued | running | done | error
+    detail: Optional[str] = None
+
+
+async def _run_generation_job(job_id: str, request: GenerateRequest):
+    jobs[job_id] = {"status": "running"}
+    try:
+        # replicate sync generation logic
+        generator = None
+        if request.seed is not None:
+            generator = torch.Generator(device="cuda")
+            generator.manual_seed(request.seed)
+
+        with torch.inference_mode():
+            result = pipeline(
+                prompt=request.prompt,
+                negative_prompt=request.negative_prompt,
+                width=request.width,
+                height=request.height,
+                num_inference_steps=request.num_inference_steps,
+                true_cfg_scale=request.true_cfg_scale,
+                generator=generator,
+            )
+
+        image = result.images[0]
+        buffered = io.BytesIO()
+        image.save(buffered, format="PNG")
+        img_b64 = base64.b64encode(buffered.getvalue()).decode()
+        used_seed = request.seed if request.seed is not None else (generator.initial_seed() if generator else 0)
+
+        jobs[job_id] = {
+            "status": "done",
+            "image": img_b64,
+            "seed": used_seed,
+        }
+    except Exception as ex:
+        jobs[job_id] = {"status": "error", "detail": str(ex)}
+
+
+@app.post("/generate_async", response_model=GenerateJobStatus)
+async def generate_async(request: GenerateRequest):
+    if pipeline is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+    job_id = uuid.uuid4().hex
+    jobs[job_id] = {"status": "queued"}
+    asyncio.create_task(_run_generation_job(job_id, request))
+    return GenerateJobStatus(job_id=job_id, status="queued")
+
+
+@app.get("/status/{job_id}", response_model=GenerateJobStatus)
+async def job_status(job_id: str):
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="job_id not found")
+    entry = jobs[job_id]
+    return GenerateJobStatus(job_id=job_id, status=entry.get("status", "unknown"), detail=entry.get("detail"))
+
+
+@app.get("/result/{job_id}", response_model=GenerateResponse)
+async def job_result(job_id: str):
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="job_id not found")
+    entry = jobs[job_id]
+    if entry.get("status") != "done":
+        raise HTTPException(status_code=202, detail=entry.get("status", "pending"))
+    return GenerateResponse(image=entry["image"], seed=entry["seed"], success=True)
 
 if __name__ == "__main__":
     logger.info("🌟 Starting Qwen-Image API Server...")
