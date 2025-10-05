@@ -237,7 +237,7 @@ async def lifespan(app: FastAPI):
             pipeline = DiffusionPipeline.from_pretrained(
                 model_name,
                 torch_dtype=torch.bfloat16,
-                low_cpu_mem_usage=False,
+                low_cpu_mem_usage=True,
                 device_map="cuda",
                 use_safetensors=True,
             )
