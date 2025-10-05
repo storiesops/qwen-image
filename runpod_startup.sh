@@ -214,11 +214,11 @@ async def lifespan(app: FastAPI):
         from dfloat11 import DFloat11Model
         from diffusers import QwenImageTransformer2DModel
         
-        # Select base via env (DF11 | NUNCHAKU)
+        # Select base via env (DF11 | NUNCHAKU | BF16)
         preferred = os.environ.get("DEFAULT_MODEL", "DF11").upper()
         model_name = "Qwen/Qwen-Image"
 
-        # If NUNCHAKU requested, load it immediately and skip DF11 path
+        # If NUNCHAKU requested, load it immediately and skip other paths
         if preferred == "NUNCHAKU":
             logger.info("📋 DEFAULT_MODEL=NUNCHAKU → loading Nunchaku INT4 on CUDA...")
             pipeline = DiffusionPipeline.from_pretrained(
@@ -231,6 +231,19 @@ async def lifespan(app: FastAPI):
             if hasattr(pipeline, "to"):
                 pipeline = pipeline.to("cuda")
             logger.info("✅ Nunchaku Qwen-Image (INT4) loaded on GPU")
+            # skip DF11 branch entirely
+        elif preferred == "BF16":
+            logger.info("📋 DEFAULT_MODEL=BF16 → loading original Qwen-Image BF16 on CUDA...")
+            pipeline = DiffusionPipeline.from_pretrained(
+                model_name,
+                torch_dtype=torch.bfloat16,
+                low_cpu_mem_usage=False,
+                device_map="cuda",
+                use_safetensors=True,
+            )
+            if hasattr(pipeline, "to"):
+                pipeline = pipeline.to("cuda")
+            logger.info("✅ Original Qwen-Image BF16 loaded on GPU")
             # skip DF11 branch entirely
         else:
             # Step 1: Load transformer config exactly as docs show
@@ -389,10 +402,11 @@ async def lifespan(app: FastAPI):
         with torch.inference_mode():
             _ = pipeline(
                 prompt="warmup",
+                negative_prompt=" ",
                 width=128,
                 height=128,
                 num_inference_steps=1,
-                true_cfg_scale=4.0,
+                true_cfg_scale=0.0,
                 generator=torch.Generator(device="cuda").manual_seed(0)
             )
         if torch.cuda.is_available():
