@@ -23,8 +23,8 @@ echo "🐍 Installing Python dependencies with verified compatibility..."
 # Upgrade pip first
 pip install --upgrade pip
 
-echo "🔥 Installing PyTorch STABLE 2.5.1 (cu124) for DFloat11..."
-# Force replace nightly/dev builds that break DFloat11 kernels
+echo "🔥 Installing PyTorch STABLE 2.5.1 (cu124)..."
+# Force replace nightly/dev builds for stability
 pip uninstall -y torch torchvision torchaudio || true
 pip install --index-url https://download.pytorch.org/whl/cu124 \
   --no-cache-dir --force-reinstall --upgrade \
@@ -45,17 +45,14 @@ pip install "safetensors>=0.3.1" --no-cache-dir
 # Clean cache after each install
 pip cache purge
 
-echo "🔥 Installing DFloat11 for lossless compression (pin deps, DO NOT change torch)..."
+echo "🔥 Installing DFloat11 (optional compression - only used if DEFAULT_MODEL=DF11)..."
 # IMPORTANT: prevent pip from upgrading torch back to 2.8.0 via transitive deps
 pip install --no-deps --force-reinstall "dfloat11[cuda12]==0.5.0" --no-cache-dir
 
 # DFloat11 runtime deps we must install explicitly when using --no-deps
-echo "📦 Installing CuPy (CUDA 12.x) + fastrlock for DFloat11 kernels..."
+echo "📦 Installing CuPy (CUDA 12.x) + fastrlock + dahuffman for DFloat11..."
 pip install --no-cache-dir --force-reinstall \
-  cupy-cuda12x==13.6.0 fastrlock==0.8.3
-
-echo "📦 Installing dahuffman (DFloat11 dependency for Huffman codec)..."
-pip install --no-cache-dir --force-reinstall dahuffman==0.4.2
+  cupy-cuda12x==13.6.0 fastrlock==0.8.3 dahuffman==0.4.2
 pip cache purge
 
 echo "🎨 Installing latest Diffusers from source..."
@@ -91,12 +88,15 @@ pkill -f "uvicorn.*qwen" || true
 # AGGRESSIVE DISK CLEANUP for RunPod VOLUME (not container!)
 echo "💾 Freeing up VOLUME disk space at /workspace..."
 
-# Clean the VOLUME disk where work actually happens
+# Clean the VOLUME disk where work actually happens - AGGRESSIVE CLEANUP
+echo "⚠️ Clearing ALL caches to free disk space for model download..."
 rm -rf /workspace/.cache/* || true
 rm -rf /workspace/Qwen-Image/.git || true  # Remove git history (saves ~100MB)
 rm -rf /workspace/*.log || true
 rm -rf /workspace/temp* || true
 rm -rf /workspace/tmp* || true
+rm -rf /root/.cache/* || true  # Clear root cache too
+rm -rf /tmp/* || true  # Clear temp files
 
 # Clean container disk too (but this isn't the main issue)
 apt-get clean || true
@@ -162,9 +162,7 @@ os.environ["DISABLE_FLASH_ATTN"] = "1"
 
 # FlashAttention causes PyTorch 2.8 dev crashes - using native attention
 FLASH_ATTN_AVAILABLE = False
-print("⚡ Using native PyTorch attention (100% compatible, still excellent!)")
-print("🚀 OPTIMIZED FOR L40S: Running DFloat11 Qwen-Image - lossless compression + 100% quality!")
-print("💪 DFloat11: 28.42GB model size, ~30GB peak VRAM vs L40S 48GB = PERFECT FIT!")
+print("⚡ Using native PyTorch SDPA attention (stable and fast!)")
 
 from diffusers import DiffusionPipeline
 
@@ -198,55 +196,64 @@ async def lifespan(app: FastAPI):
     # Startup
     global pipeline
     
-    logger.info("🚀 Loading DFloat11 Qwen-Image - LOSSLESS 32% compression + 100% quality for L40S!")
-    
-    # CRITICAL: Maximum memory cleanup before loading
+    # CRITICAL: AGGRESSIVE disk cleanup before model download
+    logger.info("🧹 Cleaning disk space before model download...")
+    import shutil
     import gc
+    
+    # Clear HuggingFace cache completely
+    cache_dir = os.environ.get("HF_HOME", "/workspace/.cache/huggingface")
+    if os.path.exists(cache_dir):
+        shutil.rmtree(cache_dir, ignore_errors=True)
+        os.makedirs(cache_dir, exist_ok=True)
+        logger.info(f"✅ Cleared {cache_dir}")
+    
+    # Clear GPU memory
     torch.cuda.empty_cache()
     gc.collect()
-    logger.info(f"🧹 Pre-load cleanup: {torch.cuda.memory_allocated() / 1024**3:.1f}GB used, {(torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()) / 1024**3:.1f}GB free")
+    
+    model_type = os.environ.get("DEFAULT_MODEL", "BF16").upper()
+    logger.info(f"🚀 Loading Qwen-Image (model type: {model_type})...")
+    logger.info(f"🧹 GPU cleanup: {torch.cuda.memory_allocated() / 1024**3:.1f}GB used, {(torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()) / 1024**3:.1f}GB free")
     
     # Load the pipeline with optimal settings for Qwen-Image
     try:
         
-        # Load DFloat11 compressed Qwen-Image - LOSSLESS 32% smaller + 100% quality!
-        from transformers.modeling_utils import no_init_weights
-        from dfloat11 import DFloat11Model
-        from diffusers import QwenImageTransformer2DModel
-        
-        # Select base via env (DF11 | NUNCHAKU | BF16)
-        preferred = os.environ.get("DEFAULT_MODEL", "DF11").upper()
+        # Load model based on DEFAULT_MODEL env variable (BF16 | NUNCHAKU | DF11)
+        preferred = os.environ.get("DEFAULT_MODEL", "BF16").upper()
         model_name = "Qwen/Qwen-Image"
 
-        # If NUNCHAKU requested, load it immediately and skip other paths
-        if preferred == "NUNCHAKU":
-            logger.info("📋 DEFAULT_MODEL=NUNCHAKU → loading Nunchaku INT4 on CUDA...")
-            pipeline = DiffusionPipeline.from_pretrained(
-                "nunchaku-tech/nunchaku-qwen-image",
-                torch_dtype=torch.bfloat16,
-                low_cpu_mem_usage=True,
-                device_map="cuda",
-                use_safetensors=True,
-            )
-            if hasattr(pipeline, "to"):
-                pipeline = pipeline.to("cuda")
-            logger.info("✅ Nunchaku Qwen-Image (INT4) loaded on GPU")
-            # skip DF11 branch entirely
-        elif preferred == "BF16":
-            logger.info("📋 DEFAULT_MODEL=BF16 → loading original Qwen-Image BF16 on CUDA...")
+        if preferred == "BF16":
+            # Original full-precision model (recommended for 2x A40 96GB setup)
+            logger.info("📋 Loading original Qwen-Image BF16 (full precision)...")
             pipeline = DiffusionPipeline.from_pretrained(
                 model_name,
                 torch_dtype=torch.bfloat16,
                 low_cpu_mem_usage=True,
-                device_map="cuda",
+                device_map="auto",
                 use_safetensors=True,
             )
-            if hasattr(pipeline, "to"):
-                pipeline = pipeline.to("cuda")
-            logger.info("✅ Original Qwen-Image BF16 loaded on GPU")
-            # skip DF11 branch entirely
-        else:
-            # Step 1: Load transformer config exactly as docs show
+            logger.info("✅ Original Qwen-Image BF16 loaded successfully")
+            
+        elif preferred == "NUNCHAKU":
+            # Nunchaku INT4 quantized (smaller, faster)
+            logger.info("📋 Loading Nunchaku INT4 quantized model...")
+            pipeline = DiffusionPipeline.from_pretrained(
+                "nunchaku-tech/nunchaku-qwen-image",
+                torch_dtype=torch.bfloat16,
+                low_cpu_mem_usage=True,
+                device_map="auto",
+                use_safetensors=True,
+            )
+            logger.info("✅ Nunchaku Qwen-Image (INT4) loaded successfully")
+            
+        elif preferred == "DF11":
+            # DFloat11 compressed (lossless compression)
+            from transformers.modeling_utils import no_init_weights
+            from dfloat11 import DFloat11Model
+            from diffusers import QwenImageTransformer2DModel
+            
+            logger.info("📋 Loading DFloat11 compressed model...")
             with no_init_weights():
                 transformer = QwenImageTransformer2DModel.from_config(
                     QwenImageTransformer2DModel.load_config(
@@ -254,36 +261,35 @@ async def lifespan(app: FastAPI):
                     ),
                 ).to(torch.bfloat16)
 
-            # Step 2: EXACT official DFloat11 loading - CRITICAL FIX
-            # The DFloat11Model.from_pretrained modifies transformer IN-PLACE
             logger.info("📦 Loading DFloat11 compressed weights...")
             compressed_model = DFloat11Model.from_pretrained(
                 "DFloat11/Qwen-Image-DF11",
-                device="cpu",  # Official: always CPU first
-                cpu_offload=False,  # 32GB+ case 
-                pin_memory=True,  # kernel path validated on 2.5.1
+                device="cpu",
+                cpu_offload=False,
+                pin_memory=True,
                 bfloat16_model=transformer,
             )
             logger.info(f"📊 DFloat11 model loaded, checking compression...")
 
-            # Create pipeline with transformer
-            logger.info("🔧 Creating pipeline with selected model...")
+            logger.info("🔧 Creating pipeline with compressed transformer...")
             pipeline = DiffusionPipeline.from_pretrained(
                 model_name,
                 transformer=transformer,
                 torch_dtype=torch.bfloat16,
             )
-        
-        # CRITICAL: Verify the transformer actually has compressed weights
-        transformer_memory = sum(p.numel() * p.element_size() for p in transformer.parameters()) / (1024**3)
-        logger.info(f"🧮 Transformer memory usage: {transformer_memory:.2f} GB")
-        if transformer_memory > 35:  # If > 35GB, compression failed
-            logger.error("❌ DFloat11 compression FAILED - transformer still full size!")
-            raise RuntimeError("DFloat11 compression did not work")
-        
-        # Step 4: Keep full model resident in VRAM for low latency
-        pipeline = pipeline.to("cuda")
-        logger.info("✅ DFloat11 loaded and placed on CUDA (full VRAM residency)")
+
+            # Verify compression
+            transformer_memory = sum(p.numel() * p.element_size() for p in transformer.parameters()) / (1024**3)
+            logger.info(f"🧮 Transformer memory usage: {transformer_memory:.2f} GB")
+            if transformer_memory > 35:
+                logger.error("❌ DFloat11 compression FAILED - transformer still full size!")
+                raise RuntimeError("DFloat11 compression did not work")
+
+            # Keep full model resident in VRAM
+            pipeline = pipeline.to("cuda")
+            logger.info("✅ DFloat11 loaded and placed on CUDA (full VRAM residency)")
+        else:
+            raise ValueError(f"Invalid DEFAULT_MODEL: {preferred}. Must be BF16, NUNCHAKU, or DF11")
         
         # VERIFY: Check all components are on CUDA
         if hasattr(pipeline, 'transformer') and pipeline.transformer is not None:
@@ -297,84 +303,12 @@ async def lifespan(app: FastAPI):
         logger.info("✅ Qwen-Image model loaded successfully!")
         
     except Exception as e:
-        logger.error(f"❌ Failed to load DFloat11 Qwen-Image: {e}")
-        logger.info("🔧 Trying progressive fallback methods...")
-        
-        # Fallback 1: DFloat11 with memory cleanup
-        try:
-            logger.info("📋 Fallback 1: DFloat11 with memory cleanup...")
-            # Clear GPU memory first
-            torch.cuda.empty_cache()
-            gc.collect()
-            
-            # Fallback: Try official pattern with cleanup
-            model_name = "Qwen/Qwen-Image"
-            
-            with no_init_weights():
-                transformer = QwenImageTransformer2DModel.from_config(
-                    QwenImageTransformer2DModel.load_config(
-                        model_name, subfolder="transformer",
-                    ),
-                ).to(torch.bfloat16)
-            
-            # Official DFloat11 loading (32GB+ case)
-            DFloat11Model.from_pretrained(
-                "DFloat11/Qwen-Image-DF11",
-                device="cpu",  # Official: always "cpu"
-                cpu_offload=False,  # 32GB+ case
-                cpu_offload_blocks=None,
-                pin_memory=False,  # Conservative for fallback
-                bfloat16_model=transformer,
-            )
-            
-            pipeline = DiffusionPipeline.from_pretrained(
-                model_name,
-                transformer=transformer,
-                torch_dtype=torch.bfloat16,
-            )
-            
-            # EXACT official pattern - use enable_model_cpu_offload()
-            pipeline.enable_model_cpu_offload()
-            
-            # VERIFY: Check device placement
-            if hasattr(pipeline, 'transformer') and pipeline.transformer is not None:
-                transformer_device = next(pipeline.transformer.parameters()).device
-                logger.info(f"🔍 Fallback transformer device: {transformer_device}")
-                
-            logger.info("✅ DFloat11 loaded with memory optimization")
-            
-        except Exception as e1:
-            logger.error(f"❌ DFloat11 fallback failed: {e1}")
-            
-            # Fallback 2: Nunchaku INT4 (smaller, faster)
-            try:
-                logger.info("📋 Fallback 2: Nunchaku INT4 (GPU only)...")
-                torch.cuda.empty_cache()
-                gc.collect()
-                
-                pipeline = DiffusionPipeline.from_pretrained(
-                    "nunchaku-tech/nunchaku-qwen-image",
-                    torch_dtype=torch.bfloat16,
-                    low_cpu_mem_usage=True,
-                    device_map="cuda",
-                    use_safetensors=True
-                )
-                
-                # Keep on GPU for speed (distill fits easily)
-                if hasattr(pipeline, "to"):
-                    pipeline = pipeline.to("cuda")
-                
-                # VERIFY: Check device placement
-                if hasattr(pipeline, 'transformer') and pipeline.transformer is not None:
-                    transformer_device = next(pipeline.transformer.parameters()).device
-                    logger.info(f"🔍 Original model transformer device: {transformer_device}")
-                    
-                logger.info("✅ Nunchaku Qwen-Image (INT4) loaded on GPU")
-                
-            except Exception as e2:
-                logger.error(f"❌ GPU-only loading failed: {e2}")
-                logger.error("💥 L40S memory exhausted. Try restarting container or reducing other processes")
-                raise e2
+        logger.error(f"❌ Failed to load Qwen-Image model: {e}")
+        logger.error("💥 Model loading failed. Check:")
+        logger.error("  1. Disk space (df -h /workspace)")
+        logger.error("  2. GPU memory (nvidia-smi)")
+        logger.error("  3. DEFAULT_MODEL environment variable is set correctly")
+        raise
     
     # Model device placement is handled by device_map="auto"
     if torch.cuda.is_available():
