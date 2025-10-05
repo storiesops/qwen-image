@@ -230,10 +230,11 @@ async def lifespan(app: FastAPI):
                 model_name,
                 torch_dtype=torch.bfloat16,
                 low_cpu_mem_usage=True,
-                device_map="auto",
                 use_safetensors=True,
             )
-            logger.info("✅ Original Qwen-Image BF16 loaded successfully")
+            # Move to GPU after loading
+            pipeline = pipeline.to("cuda")
+            logger.info("✅ Original Qwen-Image BF16 loaded on GPU")
             
         elif preferred == "NUNCHAKU":
             # Nunchaku INT4 quantized (smaller, faster)
@@ -242,10 +243,11 @@ async def lifespan(app: FastAPI):
                 "nunchaku-tech/nunchaku-qwen-image",
                 torch_dtype=torch.bfloat16,
                 low_cpu_mem_usage=True,
-                device_map="auto",
                 use_safetensors=True,
             )
-            logger.info("✅ Nunchaku Qwen-Image (INT4) loaded successfully")
+            # Move to GPU after loading
+            pipeline = pipeline.to("cuda")
+            logger.info("✅ Nunchaku Qwen-Image (INT4) loaded on GPU")
             
         elif preferred == "DF11":
             # DFloat11 compressed (lossless compression)
