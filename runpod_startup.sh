@@ -28,12 +28,26 @@ echo "🐍 Installing Python dependencies with verified compatibility..."
 # Upgrade pip first
 pip install --upgrade pip
 
-echo "🔥 Installing PyTorch STABLE 2.5.1 (cu124)..."
-# Force replace nightly/dev builds for stability
+echo "🔥 Installing PyTorch 2.5.1..."
+# Detect CUDA version and install matching PyTorch
+CUDA_VERSION=$(nvidia-smi | grep "CUDA Version" | awk '{print $9}' | cut -d. -f1,2)
+echo "📊 Detected CUDA Version: $CUDA_VERSION"
+
+# Force replace any existing torch
 pip uninstall -y torch torchvision torchaudio || true
-pip install --index-url https://download.pytorch.org/whl/cu124 \
-  --no-cache-dir --force-reinstall --upgrade \
-  torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1
+
+# Install PyTorch matching CUDA version
+if [[ "$CUDA_VERSION" == "12.9" ]] || [[ "$CUDA_VERSION" == "12.8" ]]; then
+    echo "🚀 Installing PyTorch for CUDA 12.8+ (supports your GPU driver)..."
+    pip install --index-url https://download.pytorch.org/whl/cu128 \
+      --no-cache-dir --force-reinstall --upgrade \
+      torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1
+else
+    echo "🚀 Installing PyTorch for CUDA 12.4..."
+    pip install --index-url https://download.pytorch.org/whl/cu124 \
+      --no-cache-dir --force-reinstall --upgrade \
+      torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1
+fi
 
 # Clean up immediately after install to save space
 pip cache purge
@@ -54,10 +68,15 @@ echo "🔥 Installing DFloat11 (optional compression - only used if DEFAULT_MODE
 # IMPORTANT: prevent pip from upgrading torch back to 2.8.0 via transitive deps
 pip install --no-deps --force-reinstall "dfloat11[cuda12]==0.5.0" --no-cache-dir
 
-# DFloat11 runtime deps we must install explicitly when using --no-deps
-echo "📦 Installing CuPy (CUDA 12.x) + fastrlock + dahuffman for DFloat11..."
-pip install --no-cache-dir --force-reinstall \
-  cupy-cuda12x==13.6.0 fastrlock==0.8.3 dahuffman==0.4.2
+# DFloat11 runtime deps - install CuPy matching CUDA version
+echo "📦 Installing CuPy for CUDA ${CUDA_VERSION}..."
+if [[ "$CUDA_VERSION" == "12.9" ]] || [[ "$CUDA_VERSION" == "12.8" ]]; then
+    # Use cupy-cuda12x (supports CUDA 12.x including 12.8, 12.9)
+    pip install --no-cache-dir --force-reinstall cupy-cuda12x fastrlock==0.8.3 dahuffman==0.4.2
+else
+    # Use specific cupy version for older CUDA
+    pip install --no-cache-dir --force-reinstall cupy-cuda12x==13.6.0 fastrlock==0.8.3 dahuffman==0.4.2
+fi
 pip cache purge
 
 echo "🎨 Installing latest Diffusers from source..."
