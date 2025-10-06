@@ -69,6 +69,7 @@ echo "🤗 Installing Hugging Face libraries with correct versions..."
 pip install "transformers>=4.51.3" --no-cache-dir
 pip install "accelerate>=0.26.1" --no-cache-dir
 pip install "safetensors>=0.3.1" --no-cache-dir
+pip install "hf-transfer>=0.1.0" --no-cache-dir  # For fast downloads
 
 # Clean cache after each install
 pip cache purge
