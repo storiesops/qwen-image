@@ -28,25 +28,34 @@ echo "🐍 Installing Python dependencies with verified compatibility..."
 # Upgrade pip first
 pip install --upgrade pip
 
-echo "🔥 Installing PyTorch..."
-# Detect CUDA version and install matching PyTorch
+echo "🔥 Checking PyTorch installation..."
+# Detect CUDA version
 CUDA_VERSION=$(nvidia-smi | grep "CUDA Version" | awk '{print $9}' | cut -d. -f1,2)
 echo "📊 Detected CUDA Version: $CUDA_VERSION"
 
-# Force replace any existing torch
-pip uninstall -y torch torchvision torchaudio || true
+# Check if PyTorch is already installed with correct CUDA version
+TORCH_VERSION=$(python3 -c "import torch; print(torch.__version__)" 2>/dev/null || echo "none")
+echo "📊 Current PyTorch: $TORCH_VERSION"
 
-# Install PyTorch matching CUDA version
-if [[ "$CUDA_VERSION" == "12.9" ]] || [[ "$CUDA_VERSION" == "12.8" ]]; then
-    echo "🚀 Installing PyTorch 2.8.0 for CUDA 12.8+ (latest stable for your GPU driver)..."
-    pip install --index-url https://download.pytorch.org/whl/cu128 \
-      --no-cache-dir --force-reinstall --upgrade \
-      torch torchvision torchaudio
+if [[ "$TORCH_VERSION" == *"cu128"* ]] && [[ "$CUDA_VERSION" == "12.8" ]]; then
+    echo "✅ PyTorch already matches CUDA 12.8 - skipping reinstall"
+elif [[ "$TORCH_VERSION" == *"cu124"* ]] && [[ "$CUDA_VERSION" == "12.4" ]]; then
+    echo "✅ PyTorch already matches CUDA 12.4 - skipping reinstall"
 else
-    echo "🚀 Installing PyTorch 2.5.1 for CUDA 12.4..."
-    pip install --index-url https://download.pytorch.org/whl/cu124 \
-      --no-cache-dir --force-reinstall --upgrade \
-      torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1
+    echo "🔄 Installing/upgrading PyTorch for CUDA $CUDA_VERSION..."
+    pip uninstall -y torch torchvision torchaudio || true
+    
+    if [[ "$CUDA_VERSION" == "12.9" ]] || [[ "$CUDA_VERSION" == "12.8" ]]; then
+        echo "🚀 Installing PyTorch 2.8.0 for CUDA 12.8+..."
+        pip install --index-url https://download.pytorch.org/whl/cu128 \
+          --no-cache-dir --force-reinstall --upgrade \
+          torch torchvision torchaudio
+    else
+        echo "🚀 Installing PyTorch 2.5.1 for CUDA 12.4..."
+        pip install --index-url https://download.pytorch.org/whl/cu124 \
+          --no-cache-dir --force-reinstall --upgrade \
+          torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1
+    fi
 fi
 
 # Clean up immediately after install to save space
