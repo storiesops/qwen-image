@@ -4,6 +4,11 @@ set -e
 echo "🚀 Starting Qwen-Image Setup on RunPod"
 echo "=========================================="
 
+# CRITICAL: Check GPU is available FIRST
+echo "🔍 Checking GPU availability..."
+nvidia-smi || echo "⚠️ WARNING: nvidia-smi failed"
+python3 -c "import torch; print(f'✅ CUDA available: {torch.cuda.is_available()}'); print(f'✅ GPU count: {torch.cuda.device_count()}'); print(f'✅ GPU name: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"N/A\"}')" || echo "❌ ERROR: PyTorch cannot detect GPU!"
+
 # Update system
 echo "📦 Updating system packages..."
 apt-get update -qq
@@ -208,13 +213,25 @@ async def lifespan(app: FastAPI):
         os.makedirs(cache_dir, exist_ok=True)
         logger.info(f"✅ Cleared {cache_dir}")
     
+    # Check CUDA availability
+    if not torch.cuda.is_available():
+        logger.error("❌ CUDA is not available! GPU not detected.")
+        logger.error("💥 This is a RunPod container issue. Check:")
+        logger.error("  1. GPU is attached to the pod (RunPod dashboard)")
+        logger.error("  2. Container image supports CUDA")
+        logger.error("  3. Try restarting the pod")
+        raise RuntimeError("CUDA not available - GPU not detected")
+    
     # Clear GPU memory
     torch.cuda.empty_cache()
     gc.collect()
     
     model_type = os.environ.get("DEFAULT_MODEL", "BF16").upper()
+    gpu_name = torch.cuda.get_device_name(0)
+    gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
     logger.info(f"🚀 Loading Qwen-Image (model type: {model_type})...")
-    logger.info(f"🧹 GPU cleanup: {torch.cuda.memory_allocated() / 1024**3:.1f}GB used, {(torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()) / 1024**3:.1f}GB free")
+    logger.info(f"🔥 Detected GPU: {gpu_name} ({gpu_memory:.1f}GB)")
+    logger.info(f"🧹 GPU cleanup: {torch.cuda.memory_allocated() / 1024**3:.1f}GB used, {(gpu_memory - torch.cuda.memory_allocated() / 1024**3):.1f}GB free")
     
     # Load the pipeline with optimal settings for Qwen-Image
     try:
