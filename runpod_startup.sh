@@ -64,10 +64,15 @@ echo "📊 Disk usage after PyTorch install:"
 echo "Container:" && df -h / || true
 echo "Volume:" && df -h /workspace || true
 
+echo "🎨 Installing latest Diffusers from source (must be first for compatibility)..."
+# Install latest diffusers FIRST to avoid version conflicts
+pip install --upgrade git+https://github.com/huggingface/diffusers --no-cache-dir
+pip cache purge
+
 echo "🤗 Installing Hugging Face libraries with correct versions..."
-# Qwen-Image specifically requires transformers>=4.51.3 for Qwen2.5-VL support  
-pip install "transformers>=4.51.3" --no-cache-dir
-pip install "accelerate>=0.26.1" --no-cache-dir
+# Upgrade transformers and accelerate to match latest diffusers
+pip install --upgrade "transformers>=4.51.3" --no-cache-dir
+pip install --upgrade "accelerate>=0.26.1" --no-cache-dir
 pip install "safetensors>=0.3.1" --no-cache-dir
 pip install "hf-transfer>=0.1.0" --no-cache-dir  # For fast downloads
 
@@ -87,11 +92,6 @@ else
     # Use specific cupy version for older CUDA
     pip install --no-cache-dir --force-reinstall cupy-cuda12x==13.6.0 fastrlock==0.8.3 dahuffman==0.4.2
 fi
-pip cache purge
-
-echo "🎨 Installing latest Diffusers from source..."
-# Always use latest diffusers for best Qwen-Image support
-pip install git+https://github.com/huggingface/diffusers --no-cache-dir
 pip cache purge
 
 echo "🚀 Installing FastAPI stack..."
