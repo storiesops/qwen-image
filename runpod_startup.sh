@@ -65,19 +65,24 @@ echo "Container:" && df -h / || true
 echo "Volume:" && df -h /workspace || true
 
 echo "🎨 Installing latest Diffusers from source (must be first for compatibility)..."
+# Uninstall existing diffusers first to ensure clean install
+pip uninstall -y diffusers || true
 # Install latest diffusers FIRST to avoid version conflicts
-pip install --upgrade git+https://github.com/huggingface/diffusers --no-cache-dir
+pip install --force-reinstall --no-cache-dir git+https://github.com/huggingface/diffusers
 pip cache purge
+echo "✅ Diffusers version: $(python3 -c 'import diffusers; print(diffusers.__version__)')"
 
 echo "🤗 Installing Hugging Face libraries with correct versions..."
-# Upgrade transformers and accelerate to match latest diffusers
-pip install --upgrade "transformers>=4.51.3" --no-cache-dir
-pip install --upgrade "accelerate>=0.26.1" --no-cache-dir
-pip install "safetensors>=0.3.1" --no-cache-dir
-pip install "hf-transfer>=0.1.0" --no-cache-dir  # For fast downloads
+# Force upgrade transformers and accelerate to match latest diffusers
+pip install --force-reinstall --upgrade --no-cache-dir "transformers>=4.51.3"
+pip install --force-reinstall --upgrade --no-cache-dir "accelerate>=0.26.1"
+pip install --no-cache-dir "safetensors>=0.3.1"
+pip install --no-cache-dir "hf-transfer>=0.1.0"  # For fast downloads
 
 # Clean cache after each install
 pip cache purge
+echo "✅ Transformers version: $(python3 -c 'import transformers; print(transformers.__version__)')"
+echo "✅ Accelerate version: $(python3 -c 'import accelerate; print(accelerate.__version__)')"
 
 echo "🔥 Installing DFloat11 (optional compression - only used if DEFAULT_MODEL=DF11)..."
 # IMPORTANT: prevent pip from upgrading torch back to 2.8.0 via transitive deps
