@@ -14,22 +14,24 @@ echo "📊 Disk space: $(df -h /workspace | tail -1 | awk '{print $4}') availabl
 
 # Install dependencies (official Qwen-Image setup)
 echo "📦 Installing dependencies..."
-pip install --upgrade pip
+python3 -m pip install --upgrade pip
 
 # Core dependencies
-pip install git+https://github.com/huggingface/diffusers
-pip install transformers accelerate safetensors
-pip install hf-transfer
+python3 -m pip install git+https://github.com/huggingface/diffusers
+python3 -m pip install transformers accelerate safetensors
+python3 -m pip install hf-transfer
 
 # API dependencies
-pip install fastapi uvicorn pillow requests
+python3 -m pip install fastapi uvicorn pillow requests
 
 # Clean cache after install
-pip cache purge
+python3 -m pip cache purge
 echo "✅ Dependencies installed!"
 echo "📊 PyTorch: $(python3 -c 'import torch; print(torch.__version__)')"
 echo "📊 Diffusers: $(python3 -c 'import diffusers; print(diffusers.__version__)')"
 echo "📊 Transformers: $(python3 -c 'import transformers; print(transformers.__version__)')"
+echo "📊 Accelerate: $(python3 -c 'import accelerate; print(accelerate.__version__)')"
+echo "📊 HF Transfer: $(python3 -c 'import hf_transfer; print(hf_transfer.__version__)')"
 
 # Create minimal API server
 echo "🔧 Creating API server..."
@@ -177,4 +179,4 @@ EOF
 
 echo "✅ Setup complete!"
 echo "🚀 Starting API server..."
-python /workspace/qwen_api.py
+python3 /workspace/qwen_api.py
