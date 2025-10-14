@@ -1,633 +1,173 @@
 #!/bin/bash
 set -e
 
-echo "🚀 Starting Qwen-Image Setup on RunPod"
-echo "=========================================="
+echo "🚀 Qwen-Image API Setup"
+echo "========================"
 
-# CRITICAL: Check GPU is available FIRST
-echo "🔍 Checking GPU availability..."
-nvidia-smi || echo "⚠️ WARNING: nvidia-smi failed"
-python3 -c "import torch; print(f'✅ CUDA available: {torch.cuda.is_available()}'); print(f'✅ GPU count: {torch.cuda.device_count()}'); print(f'✅ GPU name: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"N/A\"}')" || echo "❌ ERROR: PyTorch cannot detect GPU!"
+# Clean disk space before model download
+echo "🧹 Cleaning disk space..."
+rm -rf /workspace/.cache/huggingface/hub/models--* 2>/dev/null || true
+rm -rf /root/.cache/huggingface/* 2>/dev/null || true
+rm -rf /tmp/* 2>/dev/null || true
+pip cache purge 2>/dev/null || true
+echo "📊 Disk space: $(df -h /workspace | tail -1 | awk '{print $4}') available"
 
-# Update system
-echo "📦 Updating system packages..."
-apt-get update -qq
-apt-get install -y git wget curl
-
-# Clone official Qwen-Image repository
-echo "📥 Cloning official Qwen-Image repository..."
-cd /workspace
-if [ ! -d "Qwen-Image" ]; then
-    git clone https://github.com/QwenLM/Qwen-Image.git
-fi
-cd Qwen-Image
-
-# Install Python dependencies with PROPER VERSIONS
-echo "🐍 Installing Python dependencies with verified compatibility..."
-
-# Upgrade pip first
+# Install dependencies (official Qwen-Image setup)
+echo "📦 Installing dependencies..."
 pip install --upgrade pip
+pip install git+https://github.com/huggingface/diffusers
+pip install fastapi uvicorn pillow requests
 
-echo "🔥 Checking PyTorch installation..."
-# Detect CUDA version
-CUDA_VERSION=$(nvidia-smi | grep "CUDA Version" | awk '{print $9}' | cut -d. -f1,2)
-echo "📊 Detected CUDA Version: $CUDA_VERSION"
-
-# Check if PyTorch is already installed with correct CUDA version
-TORCH_VERSION=$(python3 -c "import torch; print(torch.__version__)" 2>/dev/null || echo "none")
-echo "📊 Current PyTorch: $TORCH_VERSION"
-
-if [[ "$TORCH_VERSION" == *"cu128"* ]] && [[ "$CUDA_VERSION" =~ ^12\.(8|9|[1-9][0-9])$ ]]; then
-    echo "✅ PyTorch already matches CUDA 12.8+ - skipping reinstall"
-elif [[ "$TORCH_VERSION" == *"cu124"* ]] && [[ "$CUDA_VERSION" == "12.4" ]]; then
-    echo "✅ PyTorch already matches CUDA 12.4 - skipping reinstall"
-else
-    echo "🔄 Installing/upgrading PyTorch for CUDA $CUDA_VERSION..."
-    pip uninstall -y torch torchvision torchaudio || true
-    
-    # For CUDA 12.8, 12.9, 13.0+ use cu128 build (which is compatible)
-    if [[ "$CUDA_VERSION" =~ ^1[23]\. ]]; then
-        echo "🚀 Installing PyTorch 2.8.0 for CUDA 12.8+ (compatible with $CUDA_VERSION)..."
-        pip install --index-url https://download.pytorch.org/whl/cu128 \
-          --no-cache-dir --force-reinstall \
-          torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0
-    else
-        echo "🚀 Installing PyTorch 2.5.1 for CUDA 12.4..."
-        pip install --index-url https://download.pytorch.org/whl/cu124 \
-          --no-cache-dir --force-reinstall \
-          torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1
-    fi
-    
-    # Verify versions
-    echo "📊 Installed PyTorch: $(python3 -c 'import torch; print(torch.__version__)')"
-    echo "📊 Installed torchvision: $(python3 -c 'import torchvision; print(torchvision.__version__)')"
-fi
-
-# Clean up immediately after install to save space
+# Clean cache after install
 pip cache purge
-echo "📊 Disk usage after PyTorch install:"
-echo "Container:" && df -h / || true
-echo "Volume:" && df -h /workspace || true
+echo "✅ Dependencies installed!"
+echo "📊 PyTorch: $(python3 -c 'import torch; print(torch.__version__)')"
+echo "📊 Diffusers: $(python3 -c 'import diffusers; print(diffusers.__version__)')"
 
-echo "🎨 Installing latest Diffusers from source (must be first for compatibility)..."
-# Uninstall existing diffusers first to ensure clean install
-pip uninstall -y diffusers || true
-# Install latest diffusers FIRST to avoid version conflicts
-pip install --force-reinstall --no-cache-dir git+https://github.com/huggingface/diffusers
-pip cache purge
-echo "✅ Diffusers version: $(python3 -c 'import diffusers; print(diffusers.__version__)')"
-
-echo "🤗 Installing Hugging Face libraries with correct versions..."
-# CRITICAL: Pin transformers to avoid torchvision compatibility issues
-pip install --force-reinstall --no-cache-dir "transformers==4.46.3"
-pip install --force-reinstall --upgrade --no-cache-dir "accelerate>=0.26.1"
-pip install --no-cache-dir "safetensors>=0.3.1"
-pip install --no-cache-dir "hf-transfer>=0.1.0"  # For fast downloads
-
-# Clean cache after each install
-pip cache purge
-echo "✅ Transformers version: $(python3 -c 'import transformers; print(transformers.__version__)')"
-echo "✅ Accelerate version: $(python3 -c 'import accelerate; print(accelerate.__version__)')"
-
-echo "🔥 Installing DFloat11 (optional compression - only used if DEFAULT_MODEL=DF11)..."
-# IMPORTANT: prevent pip from upgrading torch back to 2.8.0 via transitive deps
-pip install --no-deps --force-reinstall "dfloat11[cuda12]==0.5.0" --no-cache-dir
-
-# DFloat11 runtime deps - install CuPy matching CUDA version
-echo "📦 Installing CuPy for CUDA ${CUDA_VERSION}..."
-if [[ "$CUDA_VERSION" == "12.9" ]] || [[ "$CUDA_VERSION" == "12.8" ]]; then
-    # Use cupy-cuda12x (supports CUDA 12.x including 12.8, 12.9)
-    pip install --no-cache-dir --force-reinstall cupy-cuda12x fastrlock==0.8.3 dahuffman==0.4.2
-else
-    # Use specific cupy version for older CUDA
-    pip install --no-cache-dir --force-reinstall cupy-cuda12x==13.6.0 fastrlock==0.8.3 dahuffman==0.4.2
-fi
-pip cache purge
-
-echo "🚀 Installing FastAPI stack..."
-pip install "fastapi>=0.100.0" "uvicorn[standard]>=0.23.0" "pydantic>=2.0.0" --no-cache-dir
-
-echo "🖼️ Installing image processing libraries..."
-pip install "pillow>=10.0.0" requests --no-cache-dir
-
-# Final cache cleanup
-pip cache purge
-echo "📊 Final disk usage after installs:"
-echo "Container:" && df -h / || true
-echo "Volume (critical):" && df -h /workspace || true
-
-echo "🌍 Setting up environment variables..."
-export HF_HOME=/workspace/.cache/huggingface  # Replace deprecated TRANSFORMERS_CACHE
-export TRANSFORMERS_CACHE=/workspace/.cache/huggingface  # Fallback for compatibility
-export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True,max_split_size_mb:512"  # Fix memory fragmentation
-export HF_HOME=/workspace/.cache/huggingface
-export TRANSFORMERS_CACHE=/workspace/.cache/huggingface
-export CUDA_LAUNCH_BLOCKING=0  # For better performance
-
-echo "🧹 EMERGENCY: Cleaning disk space and GPU processes..."
-# Kill any existing Python processes
-pkill -f "python.*qwen" || true
-pkill -f "uvicorn.*qwen" || true
-
-# AGGRESSIVE DISK CLEANUP for RunPod VOLUME (not container!)
-echo "💾 Freeing up VOLUME disk space at /workspace..."
-
-# Clean the VOLUME disk where work actually happens - AGGRESSIVE CLEANUP
-echo "⚠️ Clearing ALL caches to free disk space for model download..."
-rm -rf /workspace/.cache/* || true
-rm -rf /workspace/Qwen-Image/.git || true  # Remove git history (saves ~100MB)
-rm -rf /workspace/*.log || true
-rm -rf /workspace/temp* || true
-rm -rf /workspace/tmp* || true
-rm -rf /root/.cache/* || true  # Clear root cache too
-rm -rf /tmp/* || true  # Clear temp files
-
-# Clean container disk too (but this isn't the main issue)
-apt-get clean || true
-rm -rf /var/lib/apt/lists/* || true
-rm -rf /tmp/* || true
-rm -rf /var/tmp/* || true
-
-# Clean Python cache (both locations)
-pip cache purge || true
-python -m pip cache purge || true
-rm -rf ~/.cache/pip || true
-
-# Clean conda if exists
-conda clean -all -y || true
-
-# Clear GPU memory
-nvidia-smi --gpu-reset-gpus=$(nvidia-smi --query-gpu=index --format=csv,noheader,nounits) || true
-
-echo "📊 Disk usage after cleanup:"
-echo "Container disk:"
-df -h /
-echo "Volume disk (where work happens):"
-df -h /workspace || echo "Volume not mounted yet"
-sleep 2
-
-echo "🚫 SKIPPING FlashAttention-2 - causes crashes with PyTorch 2.8 dev even when gracefully handled"
-echo "⚡ Using native PyTorch attention (100% reliable, still fast!)"
-
-# Create our simple API wrapper
-echo "🔧 Creating FastAPI wrapper..."
-echo "🧹 FINAL cleanup before writing API file..."
-# Emergency volume cleanup right before file creation
-rm -rf /workspace/.cache/huggingface/hub/models--* || true
-df -h /workspace || true
+# Create minimal API server
+echo "🔧 Creating API server..."
 cat > /workspace/qwen_api.py << 'EOF'
-#!/usr/bin/env python3
-"""
-Simple FastAPI wrapper for Qwen-Image
-No authentication required - clean and simple!
-"""
-import os
-import sys
-import logging
-import asyncio
-from typing import Optional, List
-from contextlib import asynccontextmanager
-
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from diffusers import DiffusionPipeline
 import torch
 import uvicorn
 from PIL import Image
 import base64
 import io
+import asyncio
 import uuid
-import uuid
+from typing import Optional
 
-# Force disable FlashAttention to prevent diffusers from auto-importing it
-import os
-os.environ["FLASH_ATTENTION_FORCE_DISABLE"] = "1"
-os.environ["DISABLE_FLASH_ATTN"] = "1"
-
-# FlashAttention causes PyTorch 2.8 dev crashes - using native attention
-FLASH_ATTN_AVAILABLE = False
-print("⚡ Using native PyTorch SDPA attention (stable and fast!)")
-
-from diffusers import DiffusionPipeline
-
-# CRITICAL: Clear any existing GPU memory first
-import torch
-import gc
-if torch.cuda.is_available():
-    torch.cuda.empty_cache()
-    gc.collect()
-    print(f"🧹 Cleared GPU memory. Available: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f}GB")
-
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# CRITICAL: Set memory management environment variables BEFORE any model loading
-import os
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:512"
-os.environ["CUDA_LAUNCH_BLOCKING"] = "0"  # For better performance
-
-# Global pipeline
+app = FastAPI(title="Qwen-Image API")
 pipeline = None
-# Async jobs memory store
-jobs = {}
-# In-memory async job store
-jobs = {}
+jobs = {}  # In-memory job store
 
-# Modern FastAPI lifespan handler (replaces deprecated on_event)
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup
+@app.on_event("startup")
+async def startup():
     global pipeline
+    print("🚀 Loading Qwen-Image model...")
     
-    # CRITICAL: AGGRESSIVE disk cleanup before model download
-    logger.info("🧹 Cleaning disk space before model download...")
-    import shutil
-    import gc
+    model_name = "Qwen/Qwen-Image"
+    torch_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     
-    # Clear HuggingFace cache completely
-    cache_dir = os.environ.get("HF_HOME", "/workspace/.cache/huggingface")
-    if os.path.exists(cache_dir):
-        shutil.rmtree(cache_dir, ignore_errors=True)
-        os.makedirs(cache_dir, exist_ok=True)
-        logger.info(f"✅ Cleared {cache_dir}")
+    pipeline = DiffusionPipeline.from_pretrained(model_name, torch_dtype=torch_dtype)
+    pipeline = pipeline.to(device)
     
-    # Check CUDA availability
-    if not torch.cuda.is_available():
-        logger.error("❌ CUDA is not available! GPU not detected.")
-        logger.error("💥 This is a RunPod container issue. Check:")
-        logger.error("  1. GPU is attached to the pod (RunPod dashboard)")
-        logger.error("  2. Container image supports CUDA")
-        logger.error("  3. Try restarting the pod")
-        raise RuntimeError("CUDA not available - GPU not detected")
-    
-    # Clear GPU memory
-    torch.cuda.empty_cache()
-    gc.collect()
-    
-    model_type = os.environ.get("DEFAULT_MODEL", "BF16").upper()
-    gpu_name = torch.cuda.get_device_name(0)
-    gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
-    logger.info(f"🚀 Loading Qwen-Image (model type: {model_type})...")
-    logger.info(f"🔥 Detected GPU: {gpu_name} ({gpu_memory:.1f}GB)")
-    logger.info(f"🧹 GPU cleanup: {torch.cuda.memory_allocated() / 1024**3:.1f}GB used, {(gpu_memory - torch.cuda.memory_allocated() / 1024**3):.1f}GB free")
-    
-    # Load the pipeline with optimal settings for Qwen-Image
-    try:
-        
-        # Load model based on DEFAULT_MODEL env variable (BF16 | NUNCHAKU | DF11)
-        preferred = os.environ.get("DEFAULT_MODEL", "BF16").upper()
-        model_name = "Qwen/Qwen-Image"
-
-        if preferred == "BF16":
-            # Original full-precision model (recommended for 2x A40 96GB setup)
-            logger.info("📋 Loading original Qwen-Image BF16 (full precision)...")
-            pipeline = DiffusionPipeline.from_pretrained(
-                model_name,
-                torch_dtype=torch.bfloat16,
-                low_cpu_mem_usage=True,
-                use_safetensors=True,
-            )
-            # Move to GPU after loading
-            pipeline = pipeline.to("cuda")
-            logger.info("✅ Original Qwen-Image BF16 loaded on GPU")
-            
-        elif preferred == "NUNCHAKU":
-            # Nunchaku INT4 quantized (smaller, faster)
-            logger.info("📋 Loading Nunchaku INT4 quantized model...")
-            pipeline = DiffusionPipeline.from_pretrained(
-                "nunchaku-tech/nunchaku-qwen-image",
-                torch_dtype=torch.bfloat16,
-                low_cpu_mem_usage=True,
-                use_safetensors=True,
-            )
-            # Move to GPU after loading
-            pipeline = pipeline.to("cuda")
-            logger.info("✅ Nunchaku Qwen-Image (INT4) loaded on GPU")
-            
-        elif preferred == "DF11":
-            # DFloat11 compressed (lossless compression)
-            from transformers.modeling_utils import no_init_weights
-            from dfloat11 import DFloat11Model
-            from diffusers import QwenImageTransformer2DModel
-            
-            logger.info("📋 Loading DFloat11 compressed model...")
-            with no_init_weights():
-                transformer = QwenImageTransformer2DModel.from_config(
-                    QwenImageTransformer2DModel.load_config(
-                        model_name, subfolder="transformer",
-                    ),
-                ).to(torch.bfloat16)
-
-            logger.info("📦 Loading DFloat11 compressed weights...")
-            compressed_model = DFloat11Model.from_pretrained(
-                "DFloat11/Qwen-Image-DF11",
-                device="cpu",
-                cpu_offload=False,
-                pin_memory=True,
-                bfloat16_model=transformer,
-            )
-            logger.info(f"📊 DFloat11 model loaded, checking compression...")
-
-            logger.info("🔧 Creating pipeline with compressed transformer...")
-            pipeline = DiffusionPipeline.from_pretrained(
-                model_name,
-                transformer=transformer,
-                torch_dtype=torch.bfloat16,
-            )
-
-            # Verify compression
-            transformer_memory = sum(p.numel() * p.element_size() for p in transformer.parameters()) / (1024**3)
-            logger.info(f"🧮 Transformer memory usage: {transformer_memory:.2f} GB")
-            if transformer_memory > 35:
-                logger.error("❌ DFloat11 compression FAILED - transformer still full size!")
-                raise RuntimeError("DFloat11 compression did not work")
-
-            # Keep full model resident in VRAM
-            pipeline = pipeline.to("cuda")
-            logger.info("✅ DFloat11 loaded and placed on CUDA (full VRAM residency)")
-        else:
-            raise ValueError(f"Invalid DEFAULT_MODEL: {preferred}. Must be BF16, NUNCHAKU, or DF11")
-        
-        # VERIFY: Check all components are on CUDA
-        if hasattr(pipeline, 'transformer') and pipeline.transformer is not None:
-            transformer_device = next(pipeline.transformer.parameters()).device
-            logger.info(f"🔍 Transformer device: {transformer_device}")
-        
-        if hasattr(pipeline, 'vae') and pipeline.vae is not None:
-            vae_device = next(pipeline.vae.parameters()).device
-            logger.info(f"🔍 VAE device: {vae_device}")
-            
-        logger.info("✅ Qwen-Image model loaded successfully!")
-        
-    except Exception as e:
-        logger.error(f"❌ Failed to load Qwen-Image model: {e}")
-        logger.error("💥 Model loading failed. Check:")
-        logger.error("  1. Disk space (df -h /workspace)")
-        logger.error("  2. GPU memory (nvidia-smi)")
-        logger.error("  3. DEFAULT_MODEL environment variable is set correctly")
-        raise
-    
-    # Model device placement is handled by device_map="auto"
-    if torch.cuda.is_available():
-        logger.info(f"✅ Model loaded with auto device mapping")
-        logger.info(f"🔥 GPU: {torch.cuda.get_device_name()}")
-        gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
-        gpu_allocated = torch.cuda.memory_allocated() / 1024**3
-        gpu_free = gpu_memory - gpu_allocated
-        logger.info(f"📊 GPU Memory: {gpu_memory:.1f}GB total, {gpu_allocated:.1f}GB used, {gpu_free:.1f}GB free")
-    else:
-        logger.info("⚠️ Running on CPU (will be slow)")
-        
-    # Enable ALL memory optimizations for better VRAM usage
-    # Disable slicing/tiling for maximum throughput (we have VRAM)
-    pass
-            
-    # L40S CUDA-ONLY: Maximum performance with 48GB VRAM
-    logger.info("🚀 L40S CUDA-ONLY: Entire model on GPU for maximum performance!")
-    logger.info("💪 48GB VRAM + DFloat11 compression = Perfect fit!")
-    logger.info("⚡ No CPU offload - pure GPU power!")
-    
-    # Warm up CUDA to reduce first-request latency
-    try:
-        logger.info("🔧 CUDA warmup (1 step @128x128)...")
-        with torch.inference_mode():
-            _ = pipeline(
-                prompt="warmup",
-                negative_prompt=" ",
-                width=128,
-                height=128,
-                num_inference_steps=1,
-                true_cfg_scale=0.0,
-                generator=torch.Generator(device="cuda").manual_seed(0)
-            )
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        logger.info("✅ Warmup done")
-    except Exception as _warmup_err:
-        logger.warning(f"⚠️ Warmup skipped: {_warmup_err}")
-    
-    # Always using native attention for PyTorch 2.8 stability
-    logger.info("⚡ Native PyTorch attention active - 100% stable and fast!")
-        
-    # Aggressive memory cleanup after model loading
-    import gc
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        gpu_free_after = (torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()) / 1024**3
-        logger.info(f"✅ GPU memory cleaned. Free memory: {gpu_free_after:.1f}GB")
-        
-    logger.info("🎉 Qwen-Image model loaded successfully!")
-    
-    yield
-    
-    # Shutdown
-    logger.info("🔄 Shutting down Qwen-Image API Server...")
-
-app = FastAPI(
-    title="Qwen-Image API",
-    description="Simple API for Qwen-Image generation",
-    version="1.0.0",
-    lifespan=lifespan
-)
+    print(f"✅ Model loaded on {device}")
+    print(f"📊 GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A'}")
 
 class GenerateRequest(BaseModel):
     prompt: str
-    negative_prompt: Optional[str] = "blurry, low quality, distorted"  # Default to enable CFG
+    negative_prompt: Optional[str] = " "
     width: int = 1024
     height: int = 1024
     num_inference_steps: int = 50
-    true_cfg_scale: float = 4.0  # Official DFloat11 default
+    true_cfg_scale: float = 4.0
     seed: Optional[int] = None
 
 class GenerateResponse(BaseModel):
-    image: str  # base64 encoded
+    image: str
     seed: int
-    success: bool = True
 
-def image_to_base64(image: Image.Image) -> str:
-    """Convert PIL image to base64 string"""
+class JobStatus(BaseModel):
+    job_id: str
+    status: str
+    detail: Optional[str] = None
+
+def generate_image(request: GenerateRequest):
+    """Synchronous image generation"""
+    generator = None
+    if request.seed is not None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        generator = torch.Generator(device=device).manual_seed(request.seed)
+    
+    with torch.inference_mode():
+        result = pipeline(
+            prompt=request.prompt,
+            negative_prompt=request.negative_prompt,
+            width=request.width,
+            height=request.height,
+            num_inference_steps=request.num_inference_steps,
+            true_cfg_scale=request.true_cfg_scale,
+            generator=generator
+        )
+    
+    image = result.images[0]
     buffered = io.BytesIO()
     image.save(buffered, format="PNG")
-    img_str = base64.b64encode(buffered.getvalue()).decode()
-    return img_str
+    img_b64 = base64.b64encode(buffered.getvalue()).decode()
+    used_seed = request.seed if request.seed is not None else (generator.initial_seed() if generator else 0)
+    
+    return img_b64, used_seed
 
-# Model loading is now handled in the lifespan function above
+async def run_generation_job(job_id: str, request: GenerateRequest):
+    """Async job runner"""
+    jobs[job_id] = {"status": "running"}
+    try:
+        print(f"🎨 Job {job_id}: Generating {request.prompt[:50]}...")
+        img_b64, used_seed = generate_image(request)
+        jobs[job_id] = {"status": "done", "image": img_b64, "seed": used_seed}
+        print(f"✅ Job {job_id}: Complete!")
+    except Exception as e:
+        jobs[job_id] = {"status": "error", "detail": str(e)}
+        print(f"❌ Job {job_id}: Failed - {e}")
 
 @app.get("/")
 async def root():
-    """Root endpoint"""
-    return {"message": "Qwen-Image API is running! 🚀", "docs": "/docs"}
+    return {"message": "Qwen-Image API", "docs": "/docs"}
 
 @app.get("/health")
 async def health():
-    """Health check endpoint"""
     if pipeline is None:
-        return JSONResponse(
-            status_code=503,
-            content={"status": "unhealthy", "message": "Model not loaded"}
-        )
-    
-    gpu_info = {}
-    if torch.cuda.is_available():
-        gpu_info = {
-            "gpu_name": torch.cuda.get_device_name(),
-            "gpu_memory_used": f"{torch.cuda.memory_allocated() / 1024**3:.2f}GB",
-            "gpu_memory_total": f"{torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f}GB"
-        }
-    
-    return {
-        "status": "healthy",
-        "model": "Qwen-Image",
-        "device": "cuda" if torch.cuda.is_available() else "cpu",
-        **gpu_info
-    }
+        raise HTTPException(status_code=503, detail="Model not loaded")
+    return {"status": "healthy", "model": "Qwen/Qwen-Image"}
 
 @app.post("/generate", response_model=GenerateResponse)
-async def generate_image(request: GenerateRequest):
-    """Generate image from text prompt"""
+async def generate(request: GenerateRequest):
+    """Synchronous generation (use for small images/steps)"""
     if pipeline is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
     
-    logger.info(f"🎨 Generating: {request.prompt[:100]}...")
-    
-    try:
-        # Set up generator for reproducible results 
-        # For DFloat11 with enable_model_cpu_offload, always use cuda
-        generator = None
-        if request.seed is not None:
-            # DFloat11 with enable_model_cpu_offload: generator must be cuda
-            device = "cuda"
-            generator = torch.Generator(device=device)
-            generator.manual_seed(request.seed)
-            logger.info(f"🎲 Generator device: {device}")
-        
-        # Generate image
-        with torch.inference_mode():
-            result = pipeline(
-                prompt=request.prompt,
-                negative_prompt=request.negative_prompt,
-                width=request.width,
-                height=request.height,
-                num_inference_steps=request.num_inference_steps,
-                true_cfg_scale=request.true_cfg_scale,  # Correct parameter for Qwen-Image
-                generator=generator
-            )
-        
-        # Get the generated image
-        image = result.images[0]
-        
-        # Convert to base64
-        image_b64 = image_to_base64(image)
-        
-        # Get the seed used
-        used_seed = request.seed if request.seed is not None else generator.initial_seed() if generator else 0
-        
-        logger.info("✅ Image generated successfully!")
-        
-        return GenerateResponse(
-            image=image_b64,
-            seed=used_seed,
-            success=True
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ Generation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    print(f"🎨 Generating: {request.prompt[:100]}...")
+    img_b64, used_seed = generate_image(request)
+    print("✅ Generated successfully!")
+    return GenerateResponse(image=img_b64, seed=used_seed)
 
-# ----------------------
-# Async job API
-# ----------------------
-
-class GenerateJobStatus(BaseModel):
-    job_id: str
-    status: str  # queued | running | done | error
-    detail: Optional[str] = None
-
-
-async def _run_generation_job(job_id: str, request: GenerateRequest):
-    jobs[job_id] = {"status": "running"}
-    try:
-        # replicate sync generation logic
-        generator = None
-        if request.seed is not None:
-            generator = torch.Generator(device="cuda")
-            generator.manual_seed(request.seed)
-
-        with torch.inference_mode():
-            result = pipeline(
-                prompt=request.prompt,
-                negative_prompt=request.negative_prompt,
-                width=request.width,
-                height=request.height,
-                num_inference_steps=request.num_inference_steps,
-                true_cfg_scale=request.true_cfg_scale,
-                generator=generator,
-            )
-
-        image = result.images[0]
-        buffered = io.BytesIO()
-        image.save(buffered, format="PNG")
-        img_b64 = base64.b64encode(buffered.getvalue()).decode()
-        used_seed = request.seed if request.seed is not None else (generator.initial_seed() if generator else 0)
-
-        jobs[job_id] = {
-            "status": "done",
-            "image": img_b64,
-            "seed": used_seed,
-        }
-    except Exception as ex:
-        jobs[job_id] = {"status": "error", "detail": str(ex)}
-
-
-@app.post("/generate_async", response_model=GenerateJobStatus)
+@app.post("/generate_async", response_model=JobStatus)
 async def generate_async(request: GenerateRequest):
+    """Async generation (recommended for large images/many steps)"""
     if pipeline is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
+    
     job_id = uuid.uuid4().hex
     jobs[job_id] = {"status": "queued"}
-    asyncio.create_task(_run_generation_job(job_id, request))
-    return GenerateJobStatus(job_id=job_id, status="queued")
+    asyncio.create_task(run_generation_job(job_id, request))
+    return JobStatus(job_id=job_id, status="queued")
 
-
-@app.get("/status/{job_id}", response_model=GenerateJobStatus)
+@app.get("/status/{job_id}", response_model=JobStatus)
 async def job_status(job_id: str):
+    """Check job status"""
     if job_id not in jobs:
-        raise HTTPException(status_code=404, detail="job_id not found")
+        raise HTTPException(status_code=404, detail="Job not found")
     entry = jobs[job_id]
-    return GenerateJobStatus(job_id=job_id, status=entry.get("status", "unknown"), detail=entry.get("detail"))
-
+    return JobStatus(job_id=job_id, status=entry["status"], detail=entry.get("detail"))
 
 @app.get("/result/{job_id}", response_model=GenerateResponse)
 async def job_result(job_id: str):
+    """Get job result"""
     if job_id not in jobs:
-        raise HTTPException(status_code=404, detail="job_id not found")
+        raise HTTPException(status_code=404, detail="Job not found")
     entry = jobs[job_id]
-    if entry.get("status") != "done":
-        raise HTTPException(status_code=202, detail=entry.get("status", "pending"))
-    return GenerateResponse(image=entry["image"], seed=entry["seed"], success=True)
+    if entry["status"] != "done":
+        raise HTTPException(status_code=202, detail=f"Job status: {entry['status']}")
+    return GenerateResponse(image=entry["image"], seed=entry["seed"])
 
 if __name__ == "__main__":
-    logger.info("🌟 Starting Qwen-Image API Server...")
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=8000,
-        log_level="info"
-    )
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 EOF
 
-# Make the API script executable
-chmod +x /workspace/qwen_api.py
-
 echo "✅ Setup complete!"
-echo ""
-echo "🚀 Starting Qwen-Image API server..."
-echo "📡 Server will be available on port 8000"
-echo "📖 API docs will be at: /docs"
-echo ""
-
-# Start the API server
-cd /workspace
-python qwen_api.py
+echo "🚀 Starting API server..."
+python /workspace/qwen_api.py
