@@ -74,8 +74,8 @@ pip cache purge
 echo "✅ Diffusers version: $(python3 -c 'import diffusers; print(diffusers.__version__)')"
 
 echo "🤗 Installing Hugging Face libraries with correct versions..."
-# Force upgrade transformers and accelerate to match latest diffusers
-pip install --force-reinstall --upgrade --no-cache-dir "transformers>=4.51.3"
+# CRITICAL: Pin transformers to avoid torchvision compatibility issues
+pip install --force-reinstall --no-cache-dir "transformers==4.46.3"
 pip install --force-reinstall --upgrade --no-cache-dir "accelerate>=0.26.1"
 pip install --no-cache-dir "safetensors>=0.3.1"
 pip install --no-cache-dir "hf-transfer>=0.1.0"  # For fast downloads
