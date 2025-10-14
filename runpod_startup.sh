@@ -49,14 +49,18 @@ else
     if [[ "$CUDA_VERSION" =~ ^1[23]\. ]]; then
         echo "🚀 Installing PyTorch 2.8.0 for CUDA 12.8+ (compatible with $CUDA_VERSION)..."
         pip install --index-url https://download.pytorch.org/whl/cu128 \
-          --no-cache-dir --force-reinstall --upgrade \
-          torch torchvision torchaudio
+          --no-cache-dir --force-reinstall \
+          torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0
     else
         echo "🚀 Installing PyTorch 2.5.1 for CUDA 12.4..."
         pip install --index-url https://download.pytorch.org/whl/cu124 \
-          --no-cache-dir --force-reinstall --upgrade \
+          --no-cache-dir --force-reinstall \
           torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1
     fi
+    
+    # Verify versions
+    echo "📊 Installed PyTorch: $(python3 -c 'import torch; print(torch.__version__)')"
+    echo "📊 Installed torchvision: $(python3 -c 'import torchvision; print(torchvision.__version__)')"
 fi
 
 # Clean up immediately after install to save space
