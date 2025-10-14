@@ -37,16 +37,17 @@ echo "📊 Detected CUDA Version: $CUDA_VERSION"
 TORCH_VERSION=$(python3 -c "import torch; print(torch.__version__)" 2>/dev/null || echo "none")
 echo "📊 Current PyTorch: $TORCH_VERSION"
 
-if [[ "$TORCH_VERSION" == *"cu128"* ]] && [[ "$CUDA_VERSION" == "12.8" ]]; then
-    echo "✅ PyTorch already matches CUDA 12.8 - skipping reinstall"
+if [[ "$TORCH_VERSION" == *"cu128"* ]] && [[ "$CUDA_VERSION" =~ ^12\.(8|9|[1-9][0-9])$ ]]; then
+    echo "✅ PyTorch already matches CUDA 12.8+ - skipping reinstall"
 elif [[ "$TORCH_VERSION" == *"cu124"* ]] && [[ "$CUDA_VERSION" == "12.4" ]]; then
     echo "✅ PyTorch already matches CUDA 12.4 - skipping reinstall"
 else
     echo "🔄 Installing/upgrading PyTorch for CUDA $CUDA_VERSION..."
     pip uninstall -y torch torchvision torchaudio || true
     
-    if [[ "$CUDA_VERSION" == "12.9" ]] || [[ "$CUDA_VERSION" == "12.8" ]]; then
-        echo "🚀 Installing PyTorch 2.8.0 for CUDA 12.8+..."
+    # For CUDA 12.8, 12.9, 13.0+ use cu128 build (which is compatible)
+    if [[ "$CUDA_VERSION" =~ ^1[23]\. ]]; then
+        echo "🚀 Installing PyTorch 2.8.0 for CUDA 12.8+ (compatible with $CUDA_VERSION)..."
         pip install --index-url https://download.pytorch.org/whl/cu128 \
           --no-cache-dir --force-reinstall --upgrade \
           torch torchvision torchaudio
